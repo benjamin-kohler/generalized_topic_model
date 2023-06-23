@@ -12,7 +12,6 @@ from tqdm import tqdm
 
 def generate_docs_by_lda(
     num_topics,
-    num_iters,
     alpha=None,
     beta=None,
     doc_args=None,
@@ -46,14 +45,11 @@ def generate_docs_by_lda(
     df_true_dist_list = [df_doc_topic, df_topic_word]
 
     docs = []
-    # num_words_list = []
     for docname in tqdm(docnames):
         sentence = []
         num_words = np.random.randint(
             default_data_args_dict["min_words"], default_data_args_dict["max_words"]
         )
-        # num_words_list.append(num_words)
-
         top_pro = df_doc_topic.loc[docname, :]
         topic_list = [np.random.choice(topicnames, p=top_pro) for _ in range(num_words)]
         for topic in topic_list:
@@ -69,21 +65,20 @@ def generate_docs_by_lda(
         if not current_dir.joinpath("data").exists():
             current_dir.joinpath("data").mkdir()
 
-        iter_name = "iter_{}".format(num_iters)
-        if not current_dir.joinpath("data", iter_name).exists():
-            current_dir.joinpath("data", iter_name).mkdir()
+        if not current_dir.joinpath("data", "lda").exists():
+            current_dir.joinpath("data", "lda").mkdir()
         true_df_doc_topic_path = (
-            current_dir.joinpath("data", iter_name, "true_df_doc_topic.pickle")
+            current_dir.joinpath("data", "lda", "true_df_doc_topic.pickle")
             .resolve()
             .as_posix()
         )
         true_df_topic_word_path = (
-            current_dir.joinpath("data", iter_name, "true_df_topic_word.pickle")
+            current_dir.joinpath("data", "lda", "true_df_topic_word.pickle")
             .resolve()
             .as_posix()
         )
         original_docs_path = (
-            current_dir.joinpath("data", iter_name, "original_docs.pickle")
+            current_dir.joinpath("data", "lda", "original_docs.pickle")
             .resolve()
             .as_posix()
         )
@@ -116,7 +111,6 @@ def _create_input_for_lda_from_generated_docs(data):
 def estimate_dist_by_lda(
     data,
     num_topics,
-    num_iters,
     num_silulations,
     voc_size,
     model_args=None,
@@ -176,18 +170,17 @@ def estimate_dist_by_lda(
         if is_output:
             p = pathlib.Path()
             current_dir = p.cwd()
-            iter_name = "iter_{}".format(num_iters)
-            if not current_dir.joinpath("data", iter_name).exists():
-                current_dir.joinpath("data", iter_name).mkdir()
+            if not current_dir.joinpath("data", "lda").exists():
+                current_dir.joinpath("data", "lda").mkdir()
             name_df_doc_topic = "df_doc_topic_" + str(i) + ".pickle"
             df_doc_topic_path = (
-                current_dir.joinpath("data", iter_name, name_df_doc_topic)
+                current_dir.joinpath("data", "lda", name_df_doc_topic)
                 .resolve()
                 .as_posix()
             )
             name_df_topic_word = "df_topic_word_" + str(i) + ".pickle"
             df_topic_word_path = (
-                current_dir.joinpath("data", iter_name, name_df_topic_word)
+                current_dir.joinpath("data", "lda", name_df_topic_word)
                 .resolve()
                 .as_posix()
             )
