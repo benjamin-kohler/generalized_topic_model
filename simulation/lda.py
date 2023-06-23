@@ -16,7 +16,7 @@ def generate_docs_by_lda(
     alpha=None,
     beta=None,
     doc_args=None,
-    is_output=False,
+    is_output=True,
 ):
     default_data_args_dict = {
         "min_words": 50,

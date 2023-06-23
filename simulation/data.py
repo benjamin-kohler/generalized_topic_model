@@ -11,8 +11,8 @@ import random
 import pandas as pd
 from sklearn.datasets import fetch_20newsgroups
 
-# Local Library
-from .preprocessing import data_preprocessing
+# First Party Library
+from preprocessing import data_preprocessing
 
 random.seed(123)
 
