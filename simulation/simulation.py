@@ -1,5 +1,6 @@
-# Local Library
-from .lda import estimate_dist_by_lda, generate_docs_by_lda
+# First Party Library
+from gtm import estimate_dist_by_gtm, generate_docs_by_gtm
+from lda import estimate_dist_by_lda, generate_docs_by_lda
 
 # from .utils import calculate_score
 
