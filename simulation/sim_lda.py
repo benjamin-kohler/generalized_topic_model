@@ -97,7 +97,7 @@ def _create_input_for_lda_from_generated_docs(data):
     input
         generated_new_docs[list]
     output
-        generated_corpus, generated_id2word
+        generated_id2word, generated_corpus
 
     """
     split_data = [sentence.split(" ") for sentence in data]
@@ -114,7 +114,7 @@ def estimate_dist_by_lda(
     num_silulations,
     voc_size,
     model_args=None,
-    is_output=False,
+    is_output=True,
 ):
     default_model_args_dict = {
         "update_every": 1,

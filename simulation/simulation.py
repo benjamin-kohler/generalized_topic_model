@@ -1,8 +1,6 @@
 # First Party Library
-from gtm import estimate_dist_by_gtm, generate_docs_by_gtm
-from lda import estimate_dist_by_lda, generate_docs_by_lda
-
-# from .utils import calculate_score
+from sim_gtm import estimate_dist_by_gtm, generate_docs_by_gtm
+from sim_lda import estimate_dist_by_lda, generate_docs_by_lda
 
 
 class Simulator:
@@ -19,12 +17,14 @@ class Simulator:
         num_silulations=100,
     ):
         if model_type not in ["lda", "gtm"]:
-            raise ValueError("Only two options for topic model: GTM, LDA.")
+            raise ValueError("Only two options for topic model: gtm, lda.")
 
         self.model_type = model_type
         self.num_topics = num_topics
         self.num_silulations = num_silulations
         self.num_covs = num_covs
+        self.num_docs = None
+        self.voc_size = None
         self.docs = None
         self.true_df_doc_topic = None
         self.true_df_topic_word = None
@@ -50,6 +50,7 @@ class Simulator:
         self.docs = docs
         self.true_df_doc_topic = df_true_dist_list[0]
         self.true_df_topic_word = df_true_dist_list[1]
+        self.num_docs = df_true_dist_list[0].shape[0]
         self.voc_size = df_true_dist_list[1].shape[1]
 
     def estimate_distributions(self, **kwargs):
@@ -67,7 +68,7 @@ class Simulator:
                 num_topics=self.num_topics,
                 num_silulations=self.num_silulations,
                 voc_size=self.voc_size,
-                **kwargs
+                **kwargs,
             )
         else:
             df_doc_topic_list, df_topic_word_list = estimate_dist_by_gtm(
@@ -75,7 +76,8 @@ class Simulator:
                 num_topics=self.num_topics,
                 num_silulations=self.num_silulations,
                 voc_size=self.voc_size,
-                **kwargs
+                num_docs=self.num_docs,
+                **kwargs,
             )
         self.df_doc_topic_list = df_doc_topic_list
         self.df_topic_word_list = df_topic_word_list

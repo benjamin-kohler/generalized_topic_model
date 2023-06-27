@@ -11,7 +11,7 @@ from scipy.optimize import linear_sum_assignment
 def matching_topic(
     score_method,
     dist_type,
-    specific_iter,
+    model_type,
     num_simulations,
 ):
     """
@@ -34,14 +34,16 @@ def matching_topic(
             "Only two distributions are supported: \
             doc_topic or topic_word."
         )
+    if model_type not in ["lda", "gtm"]:
+        raise ValueError("Only two options for topic model: gtm, lda.")
     p = pathlib.Path()
     current_dir = p.cwd()
 
     corres_num_topic_dict = {}
 
-    iter_name = "iter_{}".format(specific_iter)
+    model_type = "{}".format(model_type)
     true_path = (
-        current_dir.joinpath("data", iter_name, "true_df_{}.pickle".format(dist_type))
+        current_dir.joinpath("data", model_type, "true_df_{}.pickle".format(dist_type))
         .resolve()
         .as_posix()
     )
@@ -52,7 +54,7 @@ def matching_topic(
         temp_corres_num_topic_dict = {}
         estimated_n_path = (
             current_dir.joinpath(
-                "data", iter_name, "df_{}_{}.pickle".format(dist_type, num)
+                "data", model_type, "df_{}_{}.pickle".format(dist_type, num)
             )
             .resolve()
             .as_posix()
@@ -119,7 +121,7 @@ def matching_topic(
 
 def calculate_score(
     score_type,
-    specific_iter,
+    model_type,
     num_simulations,
     corres_num_topic_dict,
 ):
@@ -209,11 +211,11 @@ def calculate_score(
 
     p = pathlib.Path()
     current_dir = p.cwd()
-    iter_name = "iter_{}".format(specific_iter)
+    model_type = "{}".format(model_type)
 
     true_df_dist_name = "true_df_{}.pickle".format(dist_type)
     true_df_dist_path = (
-        current_dir.joinpath("data", iter_name, true_df_dist_name).resolve().as_posix()
+        current_dir.joinpath("data", model_type, true_df_dist_name).resolve().as_posix()
     )
     with open(true_df_dist_path, "rb") as f:
         true_df_dist = pickle.load(f)
@@ -222,7 +224,7 @@ def calculate_score(
     for num_sim in range(num_simulations):
         target_df_dist_path = (
             current_dir.joinpath(
-                "data", iter_name, "df_{}_{}.pickle".format(dist_type, num_sim)
+                "data", model_type, "df_{}_{}.pickle".format(dist_type, num_sim)
             )
             .resolve()
             .as_posix()
