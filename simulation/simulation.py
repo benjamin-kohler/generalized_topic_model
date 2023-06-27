@@ -73,10 +73,10 @@ class Simulator:
         else:
             df_doc_topic_list, df_topic_word_list = estimate_dist_by_gtm(
                 data=self.docs,
-                num_topics=self.num_topics,
-                num_silulations=self.num_silulations,
-                voc_size=self.voc_size,
                 num_docs=self.num_docs,
+                num_topics=self.num_topics,
+                voc_size=self.voc_size,
+                num_silulations=self.num_silulations,
                 **kwargs,
             )
         self.df_doc_topic_list = df_doc_topic_list

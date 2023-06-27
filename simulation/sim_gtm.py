@@ -99,7 +99,7 @@ def generate_docs_by_gtm(
 
     topicnames = ["Topic" + str(i) for i in range(num_topics)]
     docnames = ["Doc" + str(i) for i in range(doc_args["num_docs"])]
-    words = ["word_" + str(i) for i in range(docgtm_args["voc_size"])]
+    words = ["word_" + str(i) for i in range(doc_args["voc_size"])]
 
     df_doc_topic = pd.DataFrame(doc_topic_pro, index=docnames, columns=topicnames)
     df_topic_word = pd.DataFrame(topic_word_pro, index=topicnames, columns=words)
@@ -193,7 +193,7 @@ def _create_input_for_gtm_from_generated_docs(
 
 
 def estimate_dist_by_gtm(
-    model_data_df,
+    data,
     num_docs,
     num_topics,
     voc_size,
@@ -205,12 +205,14 @@ def estimate_dist_by_gtm(
 ):
     # TODO setting the default args
     default_model_args_dict = {
-        "update_every": 1,
+        "num_epochs": 10,
+        "update_prior": True,
     }
     if model_args is None:
         model_args = default_model_args_dict
 
     df_doc_topic_list, df_topic_word_list = [], []
+    model_data_df = _create_input_for_gtm_from_generated_docs(data)
     for i in tqdm(range(num_silulations)):
         train_dataset = GTMCorpus(
             model_data_df, embeddings_type=None, prevalence="~ cov", content="~ cov"
@@ -218,9 +220,8 @@ def estimate_dist_by_gtm(
         tm = GTM(
             train_dataset,
             doc_topic_prior=doc_topic_prior,
-            update_prior=True,
             decoder_type=decoder_type,
-            num_epochs=10,
+            **model_args
         )
         df_doc_topic = pd.DataFrame(
             tm.get_doc_topic_distribution(train_dataset),
