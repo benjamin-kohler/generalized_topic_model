@@ -200,6 +200,7 @@ def estimate_dist_by_gtm(
     num_silulations,
     doc_topic_prior,
     decoder_type,
+    embeddings_type=None,
     model_args=None,
     is_output=True,
 ):
@@ -213,10 +214,13 @@ def estimate_dist_by_gtm(
 
     df_doc_topic_list, df_topic_word_list = [], []
     model_data_df = _create_input_for_gtm_from_generated_docs(data)
+    train_dataset = GTMCorpus(
+        model_data_df,
+        embeddings_type=embeddings_type,
+        prevalence="~ cov",
+        content="~ cov",
+    )
     for i in tqdm(range(num_silulations)):
-        train_dataset = GTMCorpus(
-            model_data_df, embeddings_type=None, prevalence="~ cov", content="~ cov"
-        )
         tm = GTM(
             train_dataset,
             doc_topic_prior=doc_topic_prior,

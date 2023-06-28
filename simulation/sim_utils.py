@@ -9,9 +9,8 @@ from scipy.optimize import linear_sum_assignment
 
 
 def matching_topic(
-    score_method,
-    dist_type,
     model_type,
+    score_method,
     num_simulations,
 ):
     """
@@ -29,11 +28,13 @@ def matching_topic(
         raise ValueError(
             "Only three options for soring: correlation, cossim, and dot_product."
         )
-    if dist_type not in ["doc_topic", "topic_word"]:
-        raise ValueError(
-            "Only two distributions are supported: \
-            doc_topic or topic_word."
-        )
+
+    # TODO check if this assignment is fine, especially top10keywords approach
+    if score_method in ["correlation", "cossim", "dot_product"]:
+        dist_type = "doc_topic"
+    else:
+        dist_type = "topic_word"
+
     if model_type not in ["lda", "gtm"]:
         raise ValueError("Only two options for topic model: gtm, lda.")
     p = pathlib.Path()
@@ -84,27 +85,31 @@ def matching_topic(
                         score_list_per_row.append(np.dot(target_col, true_target_col))
                 score_list.append(score_list_per_row)
         else:
+            # TODO check if this logic is fine
             score_list = []
-            for true_idx in true_df.index:
-                true_target_idx = true_df.loc[true_idx, :]
+            true_topic_keywords_dict, estimated_topic_keywords_dict = {}, {}
+            for index in true_df.index:
+                true_word = true_df.loc[index, :]
                 score_list_per_row = []
-                for idx in estimated_df.index:
-                    target_idx = estimated_df.loc[idx, :]
-                    if score_method == "correlation":
-                        score_list_per_row.append(
-                            np.corrcoef(target_idx, true_target_idx)[0][1]
-                        )
-                    elif score_method == "cossim":
-                        score_list_per_row.append(
-                            np.dot(target_idx.T, true_target_idx)
-                            / (
-                                np.linalg.norm(target_idx)
-                                * np.linalg.norm(true_target_idx)
-                            )
-                        )
-                    else:
-                        score_list_per_row.append(np.dot(target_idx, true_target_idx))
-                score_list.append(score_list_per_row)
+                true_topic_keywords_dict[index] = list(
+                    true_word.sort_values(ascending=False).index
+                )[:10]
+                estimated_word = estimated_df.loc[index, :]
+                estimated_topic_keywords_dict[index] = list(
+                    estimated_word.sort_values(ascending=False).index
+                )[:10]
+                estimated_word = estimated_df.loc[index, :]
+            for t_topic in true_topic_keywords_dict.keys():
+                score_list_per_index = []
+                true_words = true_topic_keywords_dict[t_topic]
+                for e_topic in estimated_topic_keywords_dict.keys():
+                    words = estimated_topic_keywords_dict[e_topic]
+                    counter = 0
+                    for word in words:
+                        if word in true_words:
+                            counter += 1
+                        score_list_per_index.append(counter / 10)
+                score_list.append(score_list_per_index)
 
         score_matrix = pd.DataFrame(score_list)
         true_topics, estimated_topics = linear_sum_assignment(-score_matrix)
@@ -120,8 +125,8 @@ def matching_topic(
 
 
 def calculate_score(
-    score_type,
     model_type,
+    score_type,
     num_simulations,
     corres_num_topic_dict,
 ):
