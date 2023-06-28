@@ -8,11 +8,7 @@ import pandas as pd
 from scipy.optimize import linear_sum_assignment
 
 
-def matching_topic(
-    model_type,
-    score_method,
-    num_simulations,
-):
+def matching_topic(model_type, score_method, num_simulations, **kwargs):
     """
     function for matching the true matrix and the estimated matrix \
     (by cosine similarity or correlation coefficient)
@@ -24,38 +20,62 @@ def matching_topic(
         corres_num_topic_dict
             {num_sim : {true_topic_idx: estimated_topic_name}}
     """
-    if score_method not in ["correlation", "cossim", "dot_product"]:
-        raise ValueError(
-            "Only three options for soring: correlation, cossim, and dot_product."
-        )
 
     # TODO check if this assignment is fine, especially top10keywords approach
     if score_method in ["correlation", "cossim", "dot_product"]:
         dist_type = "doc_topic"
-    else:
+    elif score_method == "keyword":
         dist_type = "topic_word"
+    else:
+        raise ValueError(
+            "Only four options for soring: correlation, cossim, and dot_product, keyword."
+        )
 
     if model_type not in ["lda", "gtm"]:
         raise ValueError("Only two options for topic model: gtm, lda.")
+
     p = pathlib.Path()
     current_dir = p.cwd()
 
     corres_num_topic_dict = {}
 
     model_type = "{}".format(model_type)
+    if model_type == "lda":
+        true_df_dist_name = "true_df_{}.pickle".format(dist_type)
+
+    else:
+        true_df_dist_name = "true_df_{}_{}_{}.pickle".format(
+            dist_type, kwargs["doc_topic_prior"], kwargs["decoder_type"]
+        )
     true_path = (
-        current_dir.joinpath("data", model_type, "true_df_{}.pickle".format(dist_type))
+        current_dir.joinpath(
+            "..",
+            "data",
+            model_type,
+            true_df_dist_name,
+        )
         .resolve()
         .as_posix()
     )
+
     with open(true_path, "rb") as f:
         true_df = pickle.load(f)
 
     for num in range(num_simulations):
         temp_corres_num_topic_dict = {}
+        if model_type == "lda":
+            estimated_df_dist_name = "df_{}_{}.pickle".format(dist_type, num)
+
+        else:
+            estimated_df_dist_name = "df_{}_{}_{}_{}.pickle".format(
+                dist_type, kwargs["doc_topic_prior"], kwargs["decoder_type"], num
+            )
         estimated_n_path = (
             current_dir.joinpath(
-                "data", model_type, "df_{}_{}.pickle".format(dist_type, num)
+                "..",
+                "data",
+                model_type,
+                estimated_df_dist_name,
             )
             .resolve()
             .as_posix()
@@ -125,10 +145,7 @@ def matching_topic(
 
 
 def calculate_score(
-    model_type,
-    score_type,
-    num_simulations,
-    corres_num_topic_dict,
+    model_type, score_type, num_simulations, corres_num_topic_dict, **kwargs
 ):
     """
     A function for calculating the scoring
@@ -138,15 +155,15 @@ def calculate_score(
         corres_num_topic_dict (output of creating_dict_for_topic_correspondence)
             {num_sim : {estimated_topic_idx: true_topic}}}
     """
-    if score_type not in ["correlation", "euclid", "cossim", "keywords"]:
-        raise ValueError(
-            "Only four options for scoring similarities: \
-            correlation, euclid, cossim, and keywords."
-        )
     if score_type in ["correlation", "euclid", "cossim"]:
         dist_type = "doc_topic"
-    else:
+    elif score_type == "keywords":
         dist_type = "topic_word"
+    else:
+        raise ValueError(
+            "Only four options for scoring similarities: \
+        correlation, euclid, cossim, and keywords."
+        )
 
     def _rearange_estimated_df(
         df,
@@ -218,18 +235,37 @@ def calculate_score(
     current_dir = p.cwd()
     model_type = "{}".format(model_type)
 
-    true_df_dist_name = "true_df_{}.pickle".format(dist_type)
+    if model_type == "lda":
+        true_df_dist_name = "true_df_{}.pickle".format(dist_type)
+    else:
+        true_df_dist_name = "true_df_{}_{}_{}.pickle".format(
+            dist_type, kwargs["doc_topic_prior"], kwargs["decoder_type"]
+        )
     true_df_dist_path = (
-        current_dir.joinpath("data", model_type, true_df_dist_name).resolve().as_posix()
+        current_dir.joinpath("..", "data", model_type, true_df_dist_name)
+        .resolve()
+        .as_posix()
     )
     with open(true_df_dist_path, "rb") as f:
         true_df_dist = pickle.load(f)
 
     score_list = []
     for num_sim in range(num_simulations):
+        if model_type == "lda":
+            target_df_dist_name = "df_{}_{}.pickle".format(dist_type, num_sim)
+        else:
+            target_df_dist_name = "df_{}_{}_{}_{}.pickle".format(
+                dist_type,
+                kwargs["doc_topic_prior"],
+                kwargs["decoder_type"],
+                num_sim,
+            )
         target_df_dist_path = (
             current_dir.joinpath(
-                "data", model_type, "df_{}_{}.pickle".format(dist_type, num_sim)
+                "..",
+                "data",
+                model_type,
+                target_df_dist_name,
             )
             .resolve()
             .as_posix()

@@ -13,7 +13,6 @@ class Simulator:
         self,
         model_type,
         num_topics,
-        num_covs,
         num_silulations=100,
     ):
         if model_type not in ["lda", "gtm"]:
@@ -22,7 +21,7 @@ class Simulator:
         self.model_type = model_type
         self.num_topics = num_topics
         self.num_silulations = num_silulations
-        self.num_covs = num_covs
+        self.num_covs = None
         self.num_docs = None
         self.voc_size = None
         self.docs = None
@@ -45,7 +44,7 @@ class Simulator:
             )
         else:
             df_true_dist_list, docs = generate_docs_by_gtm(
-                num_topics=self.num_topics, num_covs=self.num_covs, **kwargs
+                num_topics=self.num_topics, **kwargs
             )
         self.docs = docs
         self.true_df_doc_topic = df_true_dist_list[0]

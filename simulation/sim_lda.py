@@ -62,23 +62,23 @@ def generate_docs_by_lda(
         p = pathlib.Path()
         current_dir = p.cwd()
 
-        if not current_dir.joinpath("data").exists():
-            current_dir.joinpath("data").mkdir()
+        if not current_dir.joinpath("..", "data").exists():
+            current_dir.joinpath("..", "data").mkdir()
 
-        if not current_dir.joinpath("data", "lda").exists():
-            current_dir.joinpath("data", "lda").mkdir()
+        if not current_dir.joinpath("..", "data", "lda").exists():
+            current_dir.joinpath("..", "data", "lda").mkdir()
         true_df_doc_topic_path = (
-            current_dir.joinpath("data", "lda", "true_df_doc_topic.pickle")
+            current_dir.joinpath("..", "data", "lda", "true_df_doc_topic.pickle")
             .resolve()
             .as_posix()
         )
         true_df_topic_word_path = (
-            current_dir.joinpath("data", "lda", "true_df_topic_word.pickle")
+            current_dir.joinpath("..", "data", "lda", "true_df_topic_word.pickle")
             .resolve()
             .as_posix()
         )
         original_docs_path = (
-            current_dir.joinpath("data", "lda", "original_docs.pickle")
+            current_dir.joinpath("..", "data", "lda", "original_docs.pickle")
             .resolve()
             .as_posix()
         )
@@ -170,17 +170,17 @@ def estimate_dist_by_lda(
         if is_output:
             p = pathlib.Path()
             current_dir = p.cwd()
-            if not current_dir.joinpath("data", "lda").exists():
-                current_dir.joinpath("data", "lda").mkdir()
+            if not current_dir.joinpath("..", "data", "lda").exists():
+                current_dir.joinpath("..", "data", "lda").mkdir()
             name_df_doc_topic = "df_doc_topic_" + str(i) + ".pickle"
             df_doc_topic_path = (
-                current_dir.joinpath("data", "lda", name_df_doc_topic)
+                current_dir.joinpath("..", "data", "lda", name_df_doc_topic)
                 .resolve()
                 .as_posix()
             )
             name_df_topic_word = "df_topic_word_" + str(i) + ".pickle"
             df_topic_word_path = (
-                current_dir.joinpath("data", "lda", name_df_topic_word)
+                current_dir.joinpath("..", "data", "lda", name_df_topic_word)
                 .resolve()
                 .as_posix()
             )

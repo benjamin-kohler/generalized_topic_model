@@ -15,7 +15,6 @@ from gtm import GTM
 
 def generate_docs_by_gtm(
     num_topics,
-    num_covs,
     doc_topic_prior,
     decoder_type,
     doc_args=None,
@@ -34,6 +33,7 @@ def generate_docs_by_gtm(
         )
 
     default_data_args_dict = {
+        "num_covs": 2,
         "min_words": 50,
         "max_words": 100,
         "num_docs": 5000,
@@ -44,8 +44,8 @@ def generate_docs_by_gtm(
     for k in default_data_args_dict.keys():
         if k not in doc_args.keys():
             doc_args[k] = default_data_args_dict[k]
-    lambda_ = np.random.rand(num_covs, num_topics)
-    prevalence_covariates = np.random.randint(0, 10, num_covs)
+    lambda_ = np.random.rand(doc_args["num_covs"], num_topics)
+    prevalence_covariates = np.random.randint(0, 10, doc_args["num_covs"])
     if doc_topic_prior == "logistic_normal":
         sqrt_sigma = np.random.rand(num_topics, num_topics)
         sigma = sqrt_sigma * sqrt_sigma.T
@@ -61,33 +61,37 @@ def generate_docs_by_gtm(
         doc_topic_pro = np.random.dirichlet(alpha, doc_args["num_docs"])
 
     content_covariates = np.array(
-        [[np.random.randint(0, 10, num_covs)] for _ in range(doc_args["num_docs"])]
+        [
+            [np.random.randint(0, 10, doc_args["num_covs"])]
+            for _ in range(doc_args["num_docs"])
+        ]
     )
     if decoder_type == "sage":
         # plain SAGE
-        # TODO1 check if my understanding of softmax and topic_word_pro is correct
+        # TODO1 check if my understanding of softmax and topic_word_pro (doc_word_pro) is correct
         # TODO2 add complete sage
         # TODO3 add complete
         topic_word_pro = np.array(
-            [
-                [random() for _ in range(doc_args["voc_size"])]
-                for _ in range(doc_args["num_docs"])
-            ]
+            [[random() for _ in range(doc_args["voc_size"])] for _ in range(num_topics)]
         )
         doc_word_pro_raw = np.dot(doc_topic_pro, topic_word_pro)
     else:
         num_embeddings = 300
-        rho = np.array(
+        rho = np.array
+        (
             [
                 [random() for _ in range(num_embeddings)]
-                for _ in range(doc_args["num_docs"])
+                for _ in range(doc_args["voc_sise"])
             ]
         )
         alpha = np.array(
             [[random() for _ in range(num_embeddings)] for _ in range(num_topics)]
         )
         phi = np.array(
-            [[random() for _ in range(num_embeddings)] for _ in range(num_covs)]
+            [
+                [random() for _ in range(num_embeddings)]
+                for _ in range(doc_args["num_covs"])
+            ]
         )
         doc_word_pro_raw = np.dot(
             rho, (np.dot(doc_topic_pro, alpha) + np.dot(content_covariates, phi)).T
@@ -121,12 +125,13 @@ def generate_docs_by_gtm(
     if is_output:
         p = pathlib.Path()
         current_dir = p.cwd()
-        if not current_dir.joinpath("data").exists():
-            current_dir.joinpath("data").mkdir()
-        if not current_dir.joinpath("data", "gtm").exists():
-            current_dir.joinpath("data", "gtm").mkdir()
+        if not current_dir.joinpath("..", "data").exists():
+            current_dir.joinpath("..", "data").mkdir()
+        if not current_dir.joinpath("..", "data", "gtm").exists():
+            current_dir.joinpath("..", "data", "gtm").mkdir()
         true_df_doc_topic_path = (
             current_dir.joinpath(
+                "..",
                 "data",
                 "gtm",
                 "true_df_doc_topic_{}_{}.pickle".format(doc_topic_prior, decoder_type),
@@ -136,6 +141,7 @@ def generate_docs_by_gtm(
         )
         true_df_topic_word_path = (
             current_dir.joinpath(
+                "..",
                 "data",
                 "gtm",
                 "true_df_topic_word_{}_{}.pickle".format(doc_topic_prior, decoder_type),
@@ -145,6 +151,7 @@ def generate_docs_by_gtm(
         )
         true_df_doc_word_path = (
             current_dir.joinpath(
+                "..",
                 "data",
                 "gtm",
                 "true_df_doc_word_{}_{}.pickle".format(doc_topic_prior, decoder_type),
@@ -154,6 +161,7 @@ def generate_docs_by_gtm(
         )
         original_docs_path = (
             current_dir.joinpath(
+                "..",
                 "data",
                 "gtm",
                 "original_docs_{}_{}.pickle".format(doc_topic_prior, decoder_type),
@@ -243,17 +251,25 @@ def estimate_dist_by_gtm(
         if is_output:
             p = pathlib.Path()
             current_dir = p.cwd()
-            if not current_dir.joinpath("data", "gtm").exists():
-                current_dir.joinpath("data", "gtm").mkdir()
-            name_df_doc_topic = "df_doc_topic_" + str(i) + ".pickle"
+            if not current_dir.joinpath("..", "data", "gtm").exists():
+                current_dir.joinpath("..", "data", "gtm").mkdir()
+            name_df_doc_topic = (
+                "df_doc_topic_{}_{}_".format(doc_topic_prior, decoder_type)
+                + str(i)
+                + ".pickle"
+            )
             df_doc_topic_path = (
-                current_dir.joinpath("data", "gtm", name_df_doc_topic)
+                current_dir.joinpath("..", "data", "gtm", name_df_doc_topic)
                 .resolve()
                 .as_posix()
             )
-            name_df_topic_word = "df_topic_word_" + str(i) + ".pickle"
+            name_df_topic_word = (
+                "df_topic_word_{}_{}_".format(doc_topic_prior, decoder_type)
+                + str(i)
+                + ".pickle"
+            )
             df_topic_word_path = (
-                current_dir.joinpath("data", "gtm", name_df_topic_word)
+                current_dir.joinpath("..", "data", "gtm", name_df_topic_word)
                 .resolve()
                 .as_posix()
             )
