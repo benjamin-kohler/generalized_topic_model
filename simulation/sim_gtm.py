@@ -62,7 +62,7 @@ def generate_docs_by_gtm(
 
     content_covariates = np.array(
         [
-            [np.random.randint(0, 10, doc_args["num_covs"])]
+            np.random.randint(0, 10, doc_args["num_covs"])
             for _ in range(doc_args["num_docs"])
         ]
     )
@@ -77,11 +77,10 @@ def generate_docs_by_gtm(
         doc_word_pro_raw = np.dot(doc_topic_pro, topic_word_pro)
     else:
         num_embeddings = 300
-        rho = np.array
-        (
+        rho = np.array(
             [
                 [random() for _ in range(num_embeddings)]
-                for _ in range(doc_args["voc_sise"])
+                for _ in range(doc_args["voc_size"])
             ]
         )
         alpha = np.array(
@@ -94,7 +93,7 @@ def generate_docs_by_gtm(
             ]
         )
         doc_word_pro_raw = np.dot(
-            rho, (np.dot(doc_topic_pro, alpha) + np.dot(content_covariates, phi)).T
+            rho, (np.dot(doc_topic_pro, alpha) + np.dot(content_covariates, phi))
         )
 
     doc_word_pro = np.exp(doc_word_pro_raw) / np.sum(
