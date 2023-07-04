@@ -58,6 +58,14 @@ def generate_docs_by_lda(
             sentence.append(word)
         docs.append(" ".join(sentence))
 
+        # top_pro = df_doc_topic.loc[docname, :]
+        # topic_list = [np.random.choice(topicnames, p=top_pro) for _ in range(num_words)]
+        # for topic in topic_list:
+        #     word_pro = df_topic_word.loc[topic, :]
+        #     word = np.random.choice(words, p=word_pro)
+        #     sentence.append(word)
+        # docs.append(" ".join(sentence))
+
     if is_output:
         p = pathlib.Path()
         current_dir = p.cwd()
@@ -137,8 +145,8 @@ def estimate_dist_by_lda(
                 topic, val = int(temp_set[0]), float(temp_set[1])
                 temp_list[topic] = val
             dist_doc_topic.append(temp_list)
-        topicnames = ["Topic" + str(i) for i in range(lda_model.num_topics)]
-        docnames = ["Doc" + str(i) for i in range(len(corpus))]
+        topicnames = ["Topic{}".format(i) for i in range(lda_model.num_topics)]
+        docnames = ["Doc{}".format(i) for i in range(len(corpus))]
         df_doc_topic = pd.DataFrame(dist_doc_topic, columns=topicnames, index=docnames)
 
         return df_doc_topic
@@ -147,7 +155,7 @@ def estimate_dist_by_lda(
         df_topic_word = pd.DataFrame(
             lda_model.get_topics(),
             columns=[id2word[i] for i in id2word],
-            index=["Topic" + str(i) for i in range(lda_model.num_topics)],
+            index=["Topic{}".format(i) for i in range(lda_model.num_topics)],
         )
         col_words = ["word_{}".format(i) for i in range(voc_size)]
 

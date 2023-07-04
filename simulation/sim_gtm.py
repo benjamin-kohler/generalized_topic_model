@@ -45,7 +45,7 @@ def generate_docs_by_gtm(
         if k not in doc_args.keys():
             doc_args[k] = default_data_args_dict[k]
     lambda_ = np.random.rand(doc_args["num_covs"], num_topics)
-    prevalence_covariates = np.random.randint(0, 10, doc_args["num_covs"])
+    prevalence_covariates = np.random.randint(0, 1, doc_args["num_covs"])
     if doc_topic_prior == "logistic_normal":
         sqrt_sigma = np.random.rand(num_topics, num_topics)
         sigma = sqrt_sigma * sqrt_sigma.T
@@ -62,18 +62,21 @@ def generate_docs_by_gtm(
 
     content_covariates = np.array(
         [
-            np.random.randint(0, 10, doc_args["num_covs"])
+            np.random.randint(0, 1, doc_args["num_covs"])
             for _ in range(doc_args["num_docs"])
         ]
     )
     if decoder_type == "sage":
         # plain SAGE
-        # TODO1 check if my understanding of softmax and topic_word_pro (doc_word_pro) is correct
+        # TODO1 check if my understanding of generating text process is correct or not
         # TODO2 add complete sage
-        # TODO3 add complete
-        topic_word_pro = np.array(
-            [[random() for _ in range(doc_args["voc_size"])] for _ in range(num_topics)]
+        # TODO3 add complete mlp
+        topic_word_pro = np.random.dirichlet(
+            [0.1 for _ in range(doc_args["voc_size"])], num_topics
         )
+        # topic_word_pro = np.exp(topic_word_pro_raw) / np.sum(
+        #     np.exp(topic_word_pro_raw), axis=1, keepdims=True
+        # )
         doc_word_pro_raw = np.dot(doc_topic_pro, topic_word_pro)
     else:
         num_embeddings = 300
@@ -93,8 +96,14 @@ def generate_docs_by_gtm(
             ]
         )
         doc_word_pro_raw = np.dot(
-            rho, (np.dot(doc_topic_pro, alpha) + np.dot(content_covariates, phi))
+            (np.dot(doc_topic_pro, alpha) + np.dot(content_covariates, phi)), rho.T
         )
+        topic_word_pro = np.random.dirichlet(
+            [0.1 for _ in range(doc_args["voc_size"])], num_topics
+        )
+        # topic_word_pro = np.exp(topic_word_pro_raw) / np.sum(
+        #     np.exp(topic_word_pro_raw), axis=1, keepdims=True
+        # )
 
     doc_word_pro = np.exp(doc_word_pro_raw) / np.sum(
         np.exp(doc_word_pro_raw), axis=1, keepdims=True
@@ -111,14 +120,14 @@ def generate_docs_by_gtm(
 
     docs = []
     for docname in tqdm(docnames):
-        sentence = []
         num_words = np.random.randint(
             default_data_args_dict["min_words"], default_data_args_dict["max_words"]
         )
         word_pro = df_doc_word.loc[docname, :]
-        for _ in range(num_words):
-            word = np.random.choice(words, p=word_pro)
-            sentence.append(word)
+        sentence = [np.random.choice(words, p=word_pro) for _ in range(num_words)]
+        # for _ in range(num_words):
+        #     word = np.random.choice(words, p=word_pro)
+        #     sentence.append(word)
         docs.append(" ".join(sentence))
 
     if is_output:
@@ -236,14 +245,14 @@ def estimate_dist_by_gtm(
         )
         df_doc_topic = pd.DataFrame(
             tm.get_doc_topic_distribution(train_dataset),
-            index=["Doc" + str(i) for i in range(num_docs)],
-            columns=["Topic" + str(i) for i in range(num_topics)],
+            index=["Doc{}".format(i) for i in range(num_docs)],
+            columns=["Topic{}".format(i) for i in range(num_topics)],
         )
         df_doc_topic_list.append(df_doc_topic)
         df_topic_word = pd.DataFrame(
-            tm.get_topic_word_distribution(),
+            tm.get_topic_word_distribution(voc_size),
             columns=["word_{}".format(i) for i in range(voc_size)],
-            index=["Topic" + str(i) for i in range(num_topics)],
+            index=["Topic{}".format(i) for i in range(num_topics)],
         )
         df_topic_word_list.append(df_topic_word)
 
