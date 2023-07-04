@@ -12,8 +12,6 @@ import torch.nn.functional as F
 from autoencoders import AutoEncoderMLP, AutoEncoderSAGE
 from priors import DirichletPrior, LogisticNormalPrior
 from torch.utils.data import DataLoader
-
-# First Party Library
 from utils import compute_mmd_loss, compute_reconstruction_loss
 
 # TO-DO:
@@ -406,7 +404,7 @@ class GTM:
 
         return np.concatenate(final_thetas, axis=0)
 
-    def get_topic_word_distribution(self, formula=None, topK=8):
+    def get_topic_word_distribution(self, voc_size):  # , formula=None, topK=8):
         """
         Get the word distribution of each topic, potentially influenced by content covariates.
         """
@@ -417,8 +415,12 @@ class GTM:
                 idxes = torch.eye(self.n_topics + self.content_covariate_size).to(
                     self.device
                 )
-                word_dist = self.AutoEncoder.decode(idxes)
-                word_dist = F.softmax(word_dist, dim=1)
+                word_dist_raw = self.AutoEncoder.decode(idxes)
+                word_dist_raw = F.softmax(word_dist_raw, dim=1)[: self.n_topics, :]
+                word_dist = torch.zeros(self.n_topics, voc_size)
+                for k, v in self.id2token.items():
+                    col = int(v.split("_")[-1])
+                    word_dist[:, col] = word_dist_raw[:, k]
                 # vals, _ = torch.topk(word_dist, topK, dim=1)
                 # vals = vals.cpu().tolist()
                 # indices = indices.cpu().tolist()
