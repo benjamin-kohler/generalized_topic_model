@@ -357,9 +357,9 @@ class GTM:
                 print(
                     f"Epoch {(epoch+1):>3d}\tLoss:{sum(epochloss_lst)/len(epochloss_lst):<.7f}"
                 )
-                print(
-                    "\n".join([str(lst) for lst in self.get_topic_word_distribution()])
-                )
+                # print(
+                #     "\n".join([str(lst) for lst in self.get_topic_word_distribution()])
+                # )
 
             if self.update_prior:
                 posterior_theta = self.get_doc_topic_distribution(train_data)
@@ -415,12 +415,10 @@ class GTM:
                 idxes = torch.eye(self.n_topics + self.content_covariate_size).to(
                     self.device
                 )
+                # TODO dimension of word_dist_raw = (n_topics + n_covs) * voc_size
                 word_dist_raw = self.AutoEncoder.decode(idxes)
-                word_dist_raw = F.softmax(word_dist_raw, dim=1)[: self.n_topics, :]
-                word_dist = torch.zeros(self.n_topics, voc_size)
-                for k, v in self.id2token.items():
-                    col = int(v.split("_")[-1])
-                    word_dist[:, col] = word_dist_raw[:, k]
+                word_dist_raw = F.softmax(word_dist_raw, dim=1)
+                # word_dist_raw = F.softmax(word_dist_raw, dim=1)[: self.n_topics, :]
                 # vals, _ = torch.topk(word_dist, topK, dim=1)
                 # vals = vals.cpu().tolist()
                 # indices = indices.cpu().tolist()
@@ -430,12 +428,17 @@ class GTM:
                 #     )
             elif self.decoder_type == "sage":
                 # topic_words = []
-                word_dist = F.softmax(self.AutoEncoder.beta.weight.T, dim=1)
+                word_dist_raw = F.softmax(self.AutoEncoder.beta.weight.T, dim=1)
                 # vals, _ = torch.topk(word_dist, topK, dim=1)
                 # vals = vals.cpu().tolist()
                 # indices = indices.cpu().tolist()
                 # for i in range(self.n_topics):
                 #     topic_words.append([self.id2token[idx] for idx in indices[i]])
+            word_dist = torch.zeros(self.n_topics, voc_size)
+            for k, v in self.id2token.items():
+                col = int(v.split("_")[-1])
+                word_dist[:, col] = word_dist_raw[:, k]
+
         return word_dist
 
     def get_topic_correlations(self):
