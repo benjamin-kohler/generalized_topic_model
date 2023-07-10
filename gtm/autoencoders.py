@@ -97,6 +97,7 @@ class AutoEncoderSAGE(nn.Module):
             dropout=0.0,
             bow_size=0,
             content_covariate_size=0,
+            estimate_interactions=False,
             log_word_frequencies=None,
             l1_beta_reg = 0, 
             l1_beta_c_reg = 0, 
@@ -119,14 +120,16 @@ class AutoEncoderSAGE(nn.Module):
         self.vocab_size = bow_size
         self.n_topic = encoder_dims[-1]
         self.content_covariate_size = content_covariate_size
-        
+        self.estimate_interactions = estimate_interactions
+
         self.beta = nn.Linear(self.n_topic, self.vocab_size)  
         if log_word_frequencies is not None:
             with torch.no_grad():
                 self.beta.bias.copy_(log_word_frequencies)
         if content_covariate_size != 0:
             self.beta_c = nn.Linear(content_covariate_size, self.vocab_size, bias=False)
-            self.beta_ci = nn.Linear(content_covariate_size*self.n_topic, self.vocab_size, bias=False) 
+            if estimate_interactions:
+                self.beta_ci = nn.Linear(content_covariate_size*self.n_topic, self.vocab_size, bias=False) 
 
         self.l1_beta_reg = l1_beta_reg
         self.l1_beta_c_reg = l1_beta_c_reg
@@ -147,12 +150,13 @@ class AutoEncoderSAGE(nn.Module):
         eta = self.beta(z)
         if content_covariates is not None:
             covariate_size = content_covariates.shape[1]
-            eta = eta + self.beta_c(content_covariates)
-            theta_rsh = z.unsqueeze(2)
-            tc_emb_rsh = content_covariates.unsqueeze(1)
-            covar_interactions = theta_rsh * tc_emb_rsh
-            batch_size, _, _ = covar_interactions.shape
-            eta += self.beta_ci(covar_interactions.reshape((batch_size, self.n_topic * covariate_size)))
+            eta += self.beta_c(content_covariates)
+            if self.estimate_interactions:
+                theta_rsh = z.unsqueeze(2)
+                tc_emb_rsh = content_covariates.unsqueeze(1)
+                covar_interactions = theta_rsh * tc_emb_rsh
+                batch_size, _, _ = covar_interactions.shape
+                eta += self.beta_ci(covar_interactions.reshape((batch_size, self.n_topic * covariate_size)))
         return eta
     
     def forward(self, x, prevalence_covariates, content_covariates, target_labels):
@@ -176,28 +180,35 @@ class AutoEncoderSAGE(nn.Module):
             beta_c_weights_sq = torch.pow(self.beta_c.weight, 2)
             sparsity_loss += self.l1_beta_c_reg * (l1_strengths_beta_c * beta_c_weights_sq).sum()
 
-            l1_strengths_beta_ci = torch.from_numpy(l1_beta_ci).to(device)
-            beta_ci_weights_sq = torch.pow(self.beta_ci.weight, 2)
-            sparsity_loss += self.l1_beta_ci_reg * (l1_strengths_beta_ci * beta_ci_weights_sq).sum() 
+            if self.estimate_interactions:
+                l1_strengths_beta_ci = torch.from_numpy(l1_beta_ci).to(device)
+                beta_ci_weights_sq = torch.pow(self.beta_ci.weight, 2)
+                sparsity_loss += self.l1_beta_ci_reg * (l1_strengths_beta_ci * beta_ci_weights_sq).sum() 
 
         return sparsity_loss
     
     def update_jeffreys_priors(self, n_train, min_weights_sq=1e-6):
+
+        l1_beta = None
+        l1_beta_c = None
+        l1_beta_ci = None
 
         weights = self.beta.weight.detach().cpu().numpy()
         weights_sq = weights ** 2
         weights_sq[weights_sq < min_weights_sq] = min_weights_sq
         l1_beta = 0.5 / weights_sq / float(n_train)
 
-        weights = self.beta_c.weight.detach().cpu().numpy()
-        weights_sq = weights ** 2
-        weights_sq[weights_sq < min_weights_sq] = min_weights_sq
-        l1_beta_c = 0.5 / weights_sq / float(n_train)
+        if self.content_covariate_size != 0:
+            weights = self.beta_c.weight.detach().cpu().numpy()
+            weights_sq = weights ** 2
+            weights_sq[weights_sq < min_weights_sq] = min_weights_sq
+            l1_beta_c = 0.5 / weights_sq / float(n_train)
 
-        weights = self.beta_ci.weight.detach().cpu().numpy()
-        weights_sq = weights ** 2
-        weights_sq[weights_sq < min_weights_sq] = min_weights_sq
-        l1_beta_ci = 0.5 / weights_sq / float(n_train)
+            if self.estimate_interactions:
+                weights = self.beta_ci.weight.detach().cpu().numpy()
+                weights_sq = weights ** 2
+                weights_sq[weights_sq < min_weights_sq] = min_weights_sq
+                l1_beta_ci = 0.5 / weights_sq / float(n_train)
 
         return l1_beta, l1_beta_c, l1_beta_ci
     

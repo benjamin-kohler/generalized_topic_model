@@ -150,12 +150,6 @@ def bert_embeddings_from_list(
     return np.array(model.encode(texts, show_progress_bar=True, batch_size=batch_size))
 
 
-def compute_reconstruction_loss(x_input, x_recon):
-    logsoftmax = torch.log_softmax(x_recon, dim=1)
-    rec_loss = -1.0 * torch.sum(x_input*logsoftmax)
-    return rec_loss
-
-
 def compute_mmd_loss(x, y, device, t=0.1, kernel='diffusion'):
     '''
     Computes the MMD loss with information diffusion kernel.

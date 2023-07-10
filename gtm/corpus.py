@@ -16,7 +16,7 @@ class GTMCorpus(Dataset):
     Corpus for the GTM model.
     """
 
-    def __init__(self, df, prevalence=None, content=None, labels=None, embeddings_type='Doc2Vec',
+    def __init__(self, df, prevalence=None, content=None, labels=None, embeddings_type=None,
                  count_words=True, normalize_doc_length=False, vectorizer=None,
                  sbert_model_to_load=None, batch_size=200, max_seq_length=100000, 
                  vector_size=300, window=10, min_count=1, workers=4, epochs=10, seed=42):
@@ -28,7 +28,7 @@ class GTMCorpus(Dataset):
             prevalence : string, formula for prevalence covariates (of the form "~ cov1 + cov2 + ..."), but allows for transformations of e.g., "~ g(cov1) + h(cov2) + ...)"
             content : string, formula for content covariates (of the form "~ cov1 + cov2 + ...")
             labels : string, formula for labels (of the form "~ label1 + label2 + ...")
-            embeddings_type : string, type of embeddings to use. Can be 'Doc2Vec' or 'SentenceTranformer'
+            embeddings_type : (optional) string, type of embeddings to use. Can be 'Doc2Vec' or 'SentenceTranformer'
             count_words : boolean, whether to produce a document-term matrix or not
             normalize_doc_length : boolean, whether to normalize the document-term matrix by document length (to accomodate for varying document lengths)
             vectorizer : sklearn CountVectorizer object, if None, a new one will be created
