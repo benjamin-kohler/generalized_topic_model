@@ -201,7 +201,6 @@ class GTM:
             predictor_dims.extend(predictor_hidden_layers)
             predictor_dims.extend([labels_size])
             self.predictor = Predictor(
-                predictor_type=predictor_type,
                 predictor_dims=predictor_dims,
                 predictor_non_linear_activation=predictor_non_linear_activation,
                 predictor_bias=predictor_bias,

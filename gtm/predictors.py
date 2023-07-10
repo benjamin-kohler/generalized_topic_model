@@ -11,7 +11,6 @@ class Predictor(nn.Module):
 
     def __init__(
             self, 
-            predictor_type='classifier',
             predictor_dims=[20, 512, 1024], 
             predictor_non_linear_activation='relu',
             predictor_bias=True,
@@ -20,7 +19,6 @@ class Predictor(nn.Module):
         
         """
         Args:       
-            predictor_type (str): 'classifier' or 'regressor'. Classifier predicts a categorical variable, regressor predicts a continuous variable.
             predictor_dims (list): list of integers, where the first element is the dimension of the input, and the last element is the dimension of the output.
             predictor_non_linear_activation (str): 'relu' or 'sigmoid'. Non-linear activation function for the hidden layers.
             predictor_bias (bool): whether to include bias terms in the hidden layers.
@@ -29,7 +27,6 @@ class Predictor(nn.Module):
 
         super(Predictor, self).__init__()
 
-        self.predictor_type = predictor_type
         self.predictor_dims = predictor_dims
         self.predictor_non_linear_activation = predictor_non_linear_activation
         self.predictor_bias = predictor_bias
