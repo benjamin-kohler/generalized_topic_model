@@ -21,7 +21,7 @@ def matching_topic(model_type, score_method, num_simulations, **kwargs):
             {num_sim : {true_topic_idx: estimated_topic_name}}
     """
 
-    # TODO check if this assignment is fine, especially top10keywords approach
+    # TODO check if this assignment is fine, especially top10 keywords approach
     if score_method in ["correlation", "cossim", "dot_product"]:
         dist_type = "doc_topic"
     elif score_method == "keyword":

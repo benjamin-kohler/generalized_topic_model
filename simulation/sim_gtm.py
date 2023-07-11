@@ -1,7 +1,6 @@
 # Standard Library
 import pathlib
 import pickle
-from random import random
 
 # Third Party Library
 import numpy as np
@@ -19,7 +18,9 @@ def generate_docs_by_gtm(
     decoder_type,
     doc_args=None,
     is_output=True,
+    decoder_estimate_interactions=False,  # for SAGE
 ):
+    np.random.seed(0)
     # return df_true_dist_list, docs
     if doc_topic_prior not in ["logistic_normal", "dirichlet"]:
         raise ValueError(
@@ -33,7 +34,8 @@ def generate_docs_by_gtm(
         )
 
     default_data_args_dict = {
-        "num_covs": 2,
+        "num_content_covs": 2,
+        "num_prev_covs": 2,
         "min_words": 50,
         "max_words": 100,
         "num_docs": 5000,
@@ -44,66 +46,83 @@ def generate_docs_by_gtm(
     for k in default_data_args_dict.keys():
         if k not in doc_args.keys():
             doc_args[k] = default_data_args_dict[k]
-    lambda_ = np.random.rand(doc_args["num_covs"], num_topics)
-    prevalence_covariates = np.random.randint(0, 1, doc_args["num_covs"])
+    lambda_ = np.random.rand(doc_args["num_content_covs"], num_topics)
+    lambda_ = lambda_ - lambda_[:, 0][:, None]
+
+    prevalence_categories = [i for i in range(doc_args["num_prev_covs"])]
+    prevalence_categories_of_each_doc = np.random.choice(
+        prevalence_categories, size=doc_args["num_docs"], replace=True
+    ).tolist()
+    prevalence_covariates = np.eye(len(prevalence_categories))[
+        prevalence_categories_of_each_doc
+    ]
+
     if doc_topic_prior == "logistic_normal":
         sqrt_sigma = np.random.rand(num_topics, num_topics)
         sigma = sqrt_sigma * sqrt_sigma.T
-        mean = np.exp(np.matmul(prevalence_covariates, lambda_))
-        doc_topic_pro_raw = np.random.multivariate_normal(
-            mean, sigma, doc_args["num_docs"]
-        )
+
+        doc_topic_raw_list = []
+        for i in range(doc_args["num_docs"]):
+            mean = np.exp(np.dot(prevalence_covariates[i, :].T, lambda_))
+            doc_topic_raw_list.append(np.random.multivariate_normal(mean, sigma))
+        doc_topic_pro_raw = np.array(doc_topic_raw_list)
+
         doc_topic_pro = np.exp(doc_topic_pro_raw) / np.sum(
             np.exp(doc_topic_pro_raw), axis=1, keepdims=True
         )
     else:
-        alpha = np.exp(np.matmul(prevalence_covariates, lambda_))
-        doc_topic_pro = np.random.dirichlet(alpha, doc_args["num_docs"])
+        doc_topic_pro_list = []
+        for i in range(doc_args["num_docs"]):
+            diri_param = np.exp(np.dot(prevalence_covariates[i, :].T, lambda_))
+            doc_topic_pro_list.append(np.random.dirichlet(diri_param))
+        doc_topic_pro = np.array(doc_topic_pro_list)
 
-    content_covariates = np.array(
-        [
-            np.random.randint(0, 1, doc_args["num_covs"])
-            for _ in range(doc_args["num_docs"])
-        ]
-    )
+    content_categories = [i for i in range(doc_args["num_content_covs"])]
+    content_categories_of_each_doc = np.random.choice(
+        content_categories, size=doc_args["num_docs"], replace=True
+    ).tolist()
+    content_covariates = np.eye(len(content_categories))[content_categories_of_each_doc]
+
     if decoder_type == "sage":
-        # plain SAGE
-        # TODO1 check if my understanding of generating text process is correct or not
-        # TODO2 add complete sage
-        # TODO3 add complete mlp
         topic_word_pro = np.random.dirichlet(
             [0.1 for _ in range(doc_args["voc_size"])], num_topics
         )
-        # topic_word_pro = np.exp(topic_word_pro_raw) / np.sum(
-        #     np.exp(topic_word_pro_raw), axis=1, keepdims=True
-        # )
-        doc_word_pro_raw = np.dot(doc_topic_pro, topic_word_pro)
+        if decoder_estimate_interactions:
+            b = np.random.rand(doc_args["num_docs"], doc_args["voc_size"])
+            cov_word_freq = np.random.randint(
+                low=0, high=2, size=(doc_args["num_content_covs"], doc_args["voc_size"])
+            )
+            cov_top_word_dev = np.random.rand(
+                doc_args["voc_size"], doc_args["num_content_covs"] * num_topics
+            )
+            doc_word_pro_raw = (
+                b
+                + np.dot(doc_topic_pro, topic_word_pro)
+                + np.dot(content_covariates, cov_word_freq)
+                + np.dot(
+                    np.array(
+                        [
+                            np.kron(row_dt, row_cc).reshape(-1)
+                            for row_dt, row_cc in zip(doc_topic_pro, content_covariates)
+                        ]
+                    ),
+                    cov_top_word_dev.T,
+                )
+            )
+        else:
+            doc_word_pro_raw = np.dot(doc_topic_pro, topic_word_pro)
+
     else:
         num_embeddings = 300
-        rho = np.array(
-            [
-                [random() for _ in range(num_embeddings)]
-                for _ in range(doc_args["voc_size"])
-            ]
-        )
-        alpha = np.array(
-            [[random() for _ in range(num_embeddings)] for _ in range(num_topics)]
-        )
-        phi = np.array(
-            [
-                [random() for _ in range(num_embeddings)]
-                for _ in range(doc_args["num_covs"])
-            ]
-        )
+        rho = np.array(np.random.rand(doc_args["voc_size"], num_embeddings))
+        alpha = np.array(np.random.rand(num_topics, num_embeddings))
+        phi = np.array(np.random.rand(doc_args["num_content_covs"], num_embeddings))
         doc_word_pro_raw = np.dot(
             (np.dot(doc_topic_pro, alpha) + np.dot(content_covariates, phi)), rho.T
         )
         topic_word_pro = np.random.dirichlet(
             [0.1 for _ in range(doc_args["voc_size"])], num_topics
         )
-        # topic_word_pro = np.exp(topic_word_pro_raw) / np.sum(
-        #     np.exp(topic_word_pro_raw), axis=1, keepdims=True
-        # )
 
     doc_word_pro = np.exp(doc_word_pro_raw) / np.sum(
         np.exp(doc_word_pro_raw), axis=1, keepdims=True
@@ -118,17 +137,26 @@ def generate_docs_by_gtm(
     df_doc_word = pd.DataFrame(doc_word_pro, index=docnames, columns=words)
     df_true_dist_list = [df_doc_topic, df_topic_word]
 
-    docs = []
+    doc = []
     for docname in tqdm(docnames):
         num_words = np.random.randint(
-            default_data_args_dict["min_words"], default_data_args_dict["max_words"]
+            low=default_data_args_dict["min_words"],
+            high=default_data_args_dict["max_words"] + 1,
         )
-        word_pro = df_doc_word.loc[docname, :]
-        sentence = [np.random.choice(words, p=word_pro) for _ in range(num_words)]
-        # for _ in range(num_words):
-        #     word = np.random.choice(words, p=word_pro)
-        #     sentence.append(word)
-        docs.append(" ".join(sentence))
+        top_pro = df_doc_topic.loc[docname, :]
+        topic_list = [np.random.choice(topicnames, p=top_pro) for _ in range(num_words)]
+        for topic in topic_list:
+            sentence = []
+            word_pro = df_topic_word.loc[topic, :]
+            word = np.random.choice(words, p=word_pro)
+            sentence.append(word)
+        doc.append(" ".join(sentence))
+
+    original_dataset_dict = {
+        "doc": doc,
+        "prevalence_covariates": prevalence_categories_of_each_doc,
+        "content_covariates": content_categories_of_each_doc,
+    }
 
     if is_output:
         p = pathlib.Path()
@@ -167,49 +195,43 @@ def generate_docs_by_gtm(
             .resolve()
             .as_posix()
         )
-        original_docs_path = (
+        original_dataset_path = (
             current_dir.joinpath(
                 "..",
                 "data",
                 "gtm",
-                "original_docs_{}_{}.pickle".format(doc_topic_prior, decoder_type),
+                "original_dataset_{}_{}.pickle".format(doc_topic_prior, decoder_type),
             )
             .resolve()
             .as_posix()
         )
+        true_lambda_path = (
+            current_dir.joinpath(
+                "..",
+                "data",
+                "gtm",
+                "true_lambda_{}_{}.pickle".format(doc_topic_prior, decoder_type),
+            )
+            .resolve()
+            .as_posix()
+        )
+
         with open(true_df_doc_topic_path, "wb") as f:
             pickle.dump(df_doc_topic, f)
         with open(true_df_topic_word_path, "wb") as f:
             pickle.dump(df_topic_word, f)
         with open(true_df_doc_word_path, "wb") as f:
             pickle.dump(df_doc_word, f)
-        with open(original_docs_path, "wb") as f:
-            pickle.dump(docs, f)
+        with open(original_dataset_path, "wb") as f:
+            pickle.dump(original_dataset_dict, f)
+        with open(true_lambda_path, "wb") as f:
+            pickle.dump(lambda_, f)
 
-    return df_true_dist_list, docs
-
-
-def _create_input_for_gtm_from_generated_docs(
-    data,
-):
-    """
-    input
-        generated_new_docs[list]
-    output
-        model_data_df
-            doc
-            doc_clean
-            cov
-    """
-    # TODO check if this setting is fine
-    num_docs = len(data)
-    cov_list = [np.random.randint(0, 1) for _ in range(num_docs)]
-    model_data_df = pd.DataFrame({"doc": data, "doc_clean": data, "cov": cov_list})
-    return model_data_df
+    return df_true_dist_list, original_dataset_dict
 
 
 def estimate_dist_by_gtm(
-    data,
+    original_dataset_dict,
     num_docs,
     num_topics,
     voc_size,
@@ -224,23 +246,32 @@ def estimate_dist_by_gtm(
     default_model_args_dict = {
         "num_epochs": 10,
         "update_prior": True,
+        "decoder_estimate_interactions": False,
     }
     if model_args is None:
         model_args = default_model_args_dict
 
     df_doc_topic_list, df_topic_word_list = [], []
-    model_data_df = _create_input_for_gtm_from_generated_docs(data)
+    model_data_df = pd.DataFrame(
+        {
+            "doc": original_dataset_dict["doc"],
+            "doc_clean": original_dataset_dict["doc"],
+            "prevalence": original_dataset_dict["prevalence_covariates"],
+            "content": original_dataset_dict["content_covariates"],
+        }
+    )
     train_dataset = GTMCorpus(
         model_data_df,
         embeddings_type=embeddings_type,
-        prevalence="~ cov",
-        content="~ cov",
+        prevalence="~ prevalence",
+        content="~ content",
     )
     for i in tqdm(range(num_silulations)):
         tm = GTM(
             train_dataset,
             doc_topic_prior=doc_topic_prior,
             decoder_type=decoder_type,
+            seed=i,
             **model_args
         )
         df_doc_topic = pd.DataFrame(
@@ -281,9 +312,19 @@ def estimate_dist_by_gtm(
                 .resolve()
                 .as_posix()
             )
+            name_train_dataset = (
+                "train_dataset_{}_{}".format(doc_topic_prior, decoder_type) + ".pickle"
+            )
+            train_dataset_path = (
+                current_dir.joinpath("..", "data", "gtm", name_train_dataset)
+                .resolve()
+                .as_posix()
+            )
             with open(df_doc_topic_path, "wb") as f:
                 pickle.dump(df_doc_topic, f)
             with open(df_topic_word_path, "wb") as f:
                 pickle.dump(df_topic_word, f)
+            with open(train_dataset_path, "wb") as f:
+                pickle.dump(train_dataset, f)
 
     return df_doc_topic_list, df_topic_word_list
