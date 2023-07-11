@@ -1,9 +1,11 @@
 #!/usr/bin/env python
 # -*- encoding: utf-8 -*-
 
+# Standard Library
 import warnings
 from typing import List, Optional
 
+# Third Party Library
 import numpy as np
 import spacy
 import torch
@@ -142,12 +144,6 @@ def bert_embeddings_from_list(texts, sbert_model_to_load, batch_size, max_seq_le
     check_max_local_length(max_seq_length, texts)
 
     return np.array(model.encode(texts, show_progress_bar=True, batch_size=batch_size))
-
-
-def compute_reconstruction_loss(x_input, x_recon):
-    logsoftmax = torch.log_softmax(x_recon, dim=1)
-    rec_loss = -1.0 * torch.sum(x_input * logsoftmax)
-    return rec_loss
 
 
 def compute_mmd_loss(x, y, device, t=0.1, kernel="diffusion"):

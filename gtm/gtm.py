@@ -6,19 +6,18 @@ import time
 
 # Third Party Library
 import numpy as np
+import pandas as pd
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from autoencoders import AutoEncoderMLP, AutoEncoderSAGE
+from predictors import Predictor
 from priors import DirichletPrior, LogisticNormalPrior
 from torch.utils.data import DataLoader
-from utils import compute_mmd_loss, compute_reconstruction_loss
+from utils import compute_mmd_loss
 
 # TO-DO:
 # multilingual tests
-# add method to update prior conditional on prevalence covariates
-# run on simulations (Shimpei)
-# run on standard evaluation datasets (Shimpei)
 # integrate with OCTIS
 # application to the U.S. congressional record
 
@@ -44,13 +43,18 @@ class GTM:
         decoder_hidden_layers=[300],
         decoder_non_linear_activation=None,
         decoder_bias=False,
+        decoder_estimate_interactions=False,
         decoder_sparsity_regularization=0.1,
+        predictor_type=None,
+        predictor_hidden_layers=[],
+        predictor_non_linear_activation=None,
+        predictor_bias=False,
         num_epochs=10,
         batch_size=256,
         learning_rate=1e-3,
         dropout=0.2,
         log_every=5,
-        tightness=1,
+        tightness=None,
         ckpt=None,
         device=None,
         seed=42,
@@ -72,6 +76,10 @@ class GTM:
             decoder_non_linear_activation: non-linear activation function for the decoder (only used with decoder_type='mlp').
             decoder_bias: whether to use bias in the decoder (only used with decoder_type='mlp').
             decoder_sparsity_regularization: regularization parameter for the decoder (only used with decoder_type='sage').
+            predictor_type: type of predictor. Either 'classifier' or 'regressor'. 'classifier' predicts a categorical variable, 'regressor' predicts a continuous variable.
+            predictor_hidden_layers: list with the size of the hidden layers for the predictor.
+            predictor_non_linear_activation: non-linear activation function for the predictor.
+            predictor_bias: whether to use bias in the predictor.
             num_epochs: number of epochs to train the model.
             batch_size: batch size for training.
             learning_rate: learning rate for training.
@@ -100,7 +108,12 @@ class GTM:
         self.decoder_hidden_layers = decoder_hidden_layers
         self.decoder_non_linear_activation = decoder_non_linear_activation
         self.decoder_bias = decoder_bias
+        self.decoder_estimate_interactions = decoder_estimate_interactions
         self.decoder_sparsity_regularization = decoder_sparsity_regularization
+        self.predictor_type = predictor_type
+        self.predictor_hidden_layers = predictor_hidden_layers
+        self.predictor_non_linear_activation = predictor_non_linear_activation
+        self.predictor_bias = predictor_bias
         self.device = device
         self.batch_size = batch_size
         self.learning_rate = learning_rate
@@ -177,6 +190,7 @@ class GTM:
                 dropout=dropout,
                 bow_size=bow_size,
                 content_covariate_size=content_covariate_size,
+                estimate_interactions=decoder_estimate_interactions,
                 log_word_frequencies=train_data.log_word_frequencies,
                 l1_beta_reg=decoder_sparsity_regularization,
                 l1_beta_c_reg=decoder_sparsity_regularization,
@@ -196,7 +210,15 @@ class GTM:
             )
 
         if labels_size != 0:
-            self.classifier = nn.Linear(n_topics, labels_size).to(device)
+            predictor_dims = [n_topics]
+            predictor_dims.extend(predictor_hidden_layers)
+            predictor_dims.extend([labels_size])
+            self.predictor = Predictor(
+                predictor_dims=predictor_dims,
+                predictor_non_linear_activation=predictor_non_linear_activation,
+                predictor_bias=predictor_bias,
+                dropout=dropout,
+            ).to(self.device)
 
         self.train(
             train_data,
@@ -224,7 +246,7 @@ class GTM:
         self.AutoEncoder.train()
 
         data_loader = DataLoader(
-            train_data, batch_size=batch_size, shuffle=True, num_workers=2
+            train_data, batch_size=batch_size, shuffle=True, num_workers=4
         )
 
         optimizer = torch.optim.Adam(self.AutoEncoder.parameters(), lr=learning_rate)
@@ -257,7 +279,8 @@ class GTM:
                 l1_beta_ci = None
 
         if ckpt:
-            self.load_model(ckpt["net"])
+            ckpt = torch.load(ckpt)
+            self.load_model(ckpt)
             optimizer.load_state_dict(ckpt["optimizer"])
             start_epoch = ckpt["epoch"] + 1
         else:
@@ -282,12 +305,13 @@ class GTM:
                     x_input = bows
                 elif self.encoder_input == "embeddings":
                     x_input = embeddings
+                x_bows = bows
 
                 # Get theta and compute reconstruction loss
                 x_recon, theta_q = self.AutoEncoder(
                     x_input, prevalence_covariates, content_covariates, target_labels
                 )
-                rec_loss = compute_reconstruction_loss(x_input, x_recon)
+                reconstruction_loss = F.cross_entropy(x_recon, x_bows)
 
                 # Get prior on theta and compute regularization loss
                 theta_prior = self.prior.sample(
@@ -296,38 +320,38 @@ class GTM:
                 mmd_loss = compute_mmd_loss(
                     theta_q, theta_prior, device=self.device, t=0.1
                 )
-                s = torch.sum(x_input) / len(x_input)
-                lamb = (
-                    5.0
-                    * s
-                    * torch.log(torch.tensor(1.0 * x_input.shape[-1]))
-                    / torch.log(torch.tensor(2.0))
-                )
-                mmd_loss = mmd_loss * lamb
+
+                if self.tightness is None:
+                    mean_length = torch.sum(x_bows) / x_bows.shape[0]
+                    vocab_size = x_bows.shape[1]
+                    tightness = mean_length * np.log(vocab_size)
+                else:
+                    tightness = self.tightness
 
                 # Add regularization to induce sparsity in the topic-word-covariate distributions
                 if self.decoder_type == "sage":
-                    sparsity_loss = self.AutoEncoder.sparsity_loss(
+                    decoder_sparsity_loss = self.AutoEncoder.sparsity_loss(
                         l1_beta, l1_beta_c, l1_beta_ci, self.device
                     )
                 else:
-                    sparsity_loss = 0
+                    decoder_sparsity_loss = 0
 
-                # Predict labels and compute classification loss
+                # Predict labels and compute prediction loss
                 if target_labels is not None:
-                    estimated_labels = self.classifier(theta_q)
-                    classification_loss = torch.nn.CrossEntropyLoss()(
-                        estimated_labels, target_labels
-                    )
+                    predictions = self.predictor(theta_q)
+                    if self.predictor_type == "classifier":
+                        prediction_loss = F.cross_entropy(predictions, target_labels)
+                    elif self.predictor_type == "regressor":
+                        prediction_loss = F.mse_loss(predictions, target_labels)
                 else:
-                    classification_loss = 0
+                    prediction_loss = 0
 
                 # Total loss
                 loss = (
-                    rec_loss
+                    reconstruction_loss
                     + mmd_loss * tightness
-                    + classification_loss
-                    + sparsity_loss
+                    + prediction_loss
+                    + decoder_sparsity_loss
                 )
 
                 loss.backward()
@@ -337,13 +361,22 @@ class GTM:
                 epochloss_lst.append(loss.item() / len(x_input))
                 if (iter + 1) % 10 == 0:
                     print(
-                        f"Epoch {(epoch+1):>3d}\tIter {(iter+1):>4d}\tLoss:{loss.item()/len(x_input):<.7f}\tRec Loss:{rec_loss.item()/len(x_input):<.7f}\tMMD:{mmd_loss.item()/len(x_input):<.7f}\tSparsity_Loss:{sparsity_loss/len(x_input):<.7f}\tPred_Loss:{classification_loss/len(x_input):<.7f}"
+                        f"Epoch {(epoch+1):>3d}\tIter {(iter+1):>4d}\tLoss:{loss.item()/len(x_input):<.7f}\tRec Loss:{reconstruction_loss.item()/len(x_input):<.7f}\tMMD:{mmd_loss.item()*tightness/len(x_input):<.7f}\tSparsity_Loss:{decoder_sparsity_loss/len(x_input):<.7f}\tPred_Loss:{prediction_loss/len(x_input):<.7f}"
                     )
 
             if (epoch + 1) % log_every == 0:
-                save_name = f'../ckpt/WTM_tp{self.n_topics}_{self.doc_topic_prior}_{time.strftime("%Y-%m-%d-%H-%M", time.localtime())}_{epoch+1}.ckpt'
+                save_name = f'../ckpt/GTM_K{self.n_topics}_{self.doc_topic_prior}_{self.decoder_type}_{self.predictor_type}_{time.strftime("%Y-%m-%d-%H-%M", time.localtime())}_{epoch+1}.ckpt'
+
+                autoencoder_state_dict = self.AutoEncoder.state_dict()
+                if self.labels_size != 0:
+                    predictor_state_dict = self.predictor.state_dict()
+                else:
+                    predictor_state_dict = None
+
                 checkpoint = {
-                    "net": self.AutoEncoder.state_dict(),
+                    "Prior": self.prior,
+                    "AutoEncoder": autoencoder_state_dict,
+                    "Predictor": predictor_state_dict,
                     "optimizer": optimizer.state_dict(),
                     "epoch": epoch,
                     "param": {
@@ -417,8 +450,7 @@ class GTM:
                 )
                 # TODO dimension of word_dist_raw = (n_topics + n_covs) * voc_size
                 word_dist_raw = self.AutoEncoder.decode(idxes)
-                word_dist_raw = F.softmax(word_dist_raw, dim=1)
-                # word_dist_raw = F.softmax(word_dist_raw, dim=1)[: self.n_topics, :]
+                word_dist_raw = F.softmax(word_dist_raw, dim=1)[: self.n_topics, :]
                 # vals, _ = torch.topk(word_dist, topK, dim=1)
                 # vals = vals.cpu().tolist()
                 # indices = indices.cpu().tolist()
@@ -441,20 +473,66 @@ class GTM:
 
         return word_dist
 
+    def get_top_docs(self, dataset, topic, topK=1):
+        """
+        Get the most representative documents for a given topic.
+        """
+        pass
+
+    def estimate_effect(self, formula, topic):
+        """
+        GLM estimates and associated standard errors of the doc-topic prior for a given formula/specification.
+        """
+        pass
+
+    def plot_wordcloud(self, topic, formula=None, topK=50):
+        """
+        Returns a wordcloud representation of a given topic.
+        """
+        pass
+
     def get_topic_correlations(self):
         """
         Plot correlations between topics for a logistic normal prior.
         """
-        pass
+        # Represent as a standard variance-covariance matrix
+        # See https://stackoverflow.com/questions/29432629/plot-correlation-matrix-using-pandas
+        sigma = pd.DataFrame(self.prior.sigma.detach().cpu().numpy())
+        mask = np.zeros_like(sigma, dtype=bool)
+        mask[np.triu_indices_from(mask)] = True
+        sigma[mask] = np.nan
+        p = (
+            sigma.style.background_gradient(cmap="coolwarm", axis=None, vmin=-1, vmax=1)
+            .highlight_null(color="#f1f1f1")  # Color NaNs grey
+            .format(precision=2)
+        )
+        return p
 
-    def get_ldavis_data_format(self):
+    def get_ldavis_data_format(self, dataset):
         """
         Returns a data format that can be used in input to pyldavis to interpret the topics.
         """
-        pass
+        term_frequency = np.ravel(dataset.M_bow.sum(axis=0))
+        doc_lengths = np.ravel(dataset.M_bow.sum(axis=1))
+        vocab = self.idx2token
+        term_topic = self.get_topic_word_distribution()
+        doc_topic_distribution = self.get_doc_topic_distribution(dataset)
 
-    def load_model(self, model):
+        data = {
+            "topic_term_dists": term_topic,
+            "doc_topic_dists": doc_topic_distribution,
+            "doc_lengths": doc_lengths,
+            "vocab": vocab,
+            "term_frequency": term_frequency,
+        }
+
+        return data
+
+    def load_model(self, ckpt):
         """
         Helper function to load a GTM model.
         """
-        self.AutoEncoder.load_state_dict(model)
+        self.AutoEncoder.load_state_dict(ckpt["AutoEncoder"])
+        self.prior = ckpt["Prior"]
+        if self.labels_size != 0:
+            self.predictor.load_state_dict(ckpt["Predictor"])
