@@ -25,6 +25,7 @@ class GTM:
     def __init__(
             self,
             train_data,
+            test_data=None,
             n_topics=20,
             doc_topic_prior='dirichlet',
             update_prior=False,
@@ -45,11 +46,14 @@ class GTM:
             predictor_non_linear_activation=None,
             predictor_bias=False,
             num_epochs=10,
+            num_workers=4,
             batch_size=256,
             learning_rate=1e-3,
             dropout=0.2,
+            print_every=10,
             log_every=5,
-            tightness=None,
+            w_prior=None,
+            w_pred_loss=1,
             ckpt=None,
             device=None,
             seed=42
@@ -58,6 +62,7 @@ class GTM:
         """
         Args:
             train_data: a GTMCorpus object
+            test_data: a GTMCorpus object
             n_topics: number of topics
             doc_topic_prior: prior on the document-topic distribution. Either 'dirichlet' or 'logistic_normal'.
             update_prior: whether to update the prior at each epoch to account for prevalence covariates.
@@ -77,11 +82,14 @@ class GTM:
             predictor_non_linear_activation: non-linear activation function for the predictor.
             predictor_bias: whether to use bias in the predictor.
             num_epochs: number of epochs to train the model.
+            num_workers: number of workers for the data loaders.
             batch_size: batch size for training.
             learning_rate: learning rate for training.
             dropout: dropout rate for training.
+            print_every: number of batches between each print.
             log_every: number of epochs between each checkpoint.
-            tightness: parameter to control the tightness of the encoder output with the document-topic prior.
+            w_prior: parameter to control the tightness of the encoder output with the document-topic prior. If set to None, w_prior is chosen automatically.
+            w_pred_loss: parameter to control the weight given to the prediction task in the likelihood. Default is 1.
             ckpt: checkpoint to load the model from.
             device: device to use for training.
             seed: random seed.
@@ -114,9 +122,12 @@ class GTM:
         self.batch_size = batch_size
         self.learning_rate = learning_rate
         self.num_epochs = num_epochs
+        self.num_workers = num_workers
         self.dropout = dropout
+        self.print_every = print_every
         self.log_every = log_every
-        self.tightness = tightness
+        self.w_prior = w_prior
+        self.w_pred_loss = w_pred_loss  
 
         self.seed = seed
         if seed is not None:
@@ -207,17 +218,22 @@ class GTM:
                 dropout=dropout
             ).to(self.device)
 
-        self.train(train_data,batch_size,learning_rate,num_epochs,log_every,tightness,ckpt)
+        self.train(train_data,test_data,batch_size,learning_rate,num_epochs,num_workers,log_every,print_every,w_prior,w_pred_loss,ckpt)
 
-    def train(self,train_data,batch_size,learning_rate,num_epochs,log_every,tightness,ckpt):
+    def train(self,train_data,test_data,batch_size,learning_rate,num_epochs,num_workers,log_every,print_every,w_prior,w_pred_loss,ckpt):
         """
         Train the model.
         """
-        self.AutoEncoder.train()
 
-        data_loader = DataLoader(train_data,batch_size=batch_size,shuffle=True,num_workers=4)
+        train_data_loader = DataLoader(train_data,batch_size=batch_size,shuffle=True,num_workers=num_workers)
 
-        optimizer = torch.optim.Adam(self.AutoEncoder.parameters(),lr=learning_rate)
+        if test_data is not None:
+            test_data_loader = DataLoader(test_data,batch_size=batch_size,shuffle=True,num_workers=num_workers)
+
+        if self.labels_size != 0:
+            optimizer = torch.optim.Adam(list(self.AutoEncoder.parameters()) + list(self.predictor.parameters()),lr=learning_rate)
+        else:
+            optimizer = torch.optim.Adam(self.AutoEncoder.parameters(),lr=learning_rate)
 
         if self.decoder_type == 'sage':
             n_train = train_data.M_bow.shape[0]
@@ -228,6 +244,10 @@ class GTM:
             else:
                 l1_beta_c = None
                 l1_beta_ci = None
+        else:
+            l1_beta = None
+            l1_beta_c = None
+            l1_beta_ci = None
 
         if ckpt:
             ckpt = torch.load(ckpt)
@@ -237,72 +257,11 @@ class GTM:
         else:
             start_epoch = 0
 
-        trainloss_lst = []
         for epoch in range(start_epoch, num_epochs):
-            epochloss_lst = []
-            for iter,data in enumerate(data_loader):
-                optimizer.zero_grad()
+            self.epoch(train_data_loader,optimizer,epoch,print_every,w_prior,w_pred_loss,l1_beta,l1_beta_c,l1_beta_ci,validation=False)
 
-                # Unpack data
-                for key, value in data.items():
-                    data[key] = value.to(self.device) 
-                bows = data.get("M_bow", None)
-                bows = bows.reshape(bows.shape[0], -1)   
-                embeddings = data.get("M_embeddings", None)
-                prevalence_covariates = data.get("M_prevalence_covariates", None)
-                content_covariates = data.get("M_content_covariates", None)
-                target_labels = data.get("M_labels", None)
-                if self.encoder_input == 'bow':
-                    x_input = bows
-                elif self.encoder_input == 'embeddings':
-                    x_input = embeddings
-                x_bows = bows
-
-                # Get theta and compute reconstruction loss
-                x_recon, theta_q = self.AutoEncoder(x_input, prevalence_covariates, content_covariates, target_labels)
-                reconstruction_loss = F.cross_entropy(x_recon, x_bows)
-
-                # Get prior on theta and compute regularization loss
-                theta_prior = self.prior.sample(N=x_input.shape[0], M_prevalence_covariates=prevalence_covariates).to(self.device)
-                mmd_loss = compute_mmd_loss(theta_q, theta_prior, device=self.device, t=0.1)      
-
-                if self.tightness is None:
-                    mean_length = torch.sum(x_bows)/x_bows.shape[0]
-                    vocab_size = x_bows.shape[1]
-                    tightness = mean_length * np.log(vocab_size) 
-                else:
-                    tightness = self.tightness
-
-                # Add regularization to induce sparsity in the topic-word-covariate distributions
-                if self.decoder_type == 'sage':
-                    decoder_sparsity_loss = self.AutoEncoder.sparsity_loss(l1_beta, l1_beta_c, l1_beta_ci, self.device)
-                else:
-                    decoder_sparsity_loss = 0
-
-                # Predict labels and compute prediction loss
-                if target_labels is not None:
-                    predictions = self.predictor(theta_q)
-                    if self.predictor_type == 'classifier':
-                        prediction_loss = F.cross_entropy(
-                            predictions, target_labels
-                        )
-                    elif self.predictor_type == 'regressor':
-                        prediction_loss = F.mse_loss(
-                            predictions, target_labels
-                        )
-                else:   
-                    prediction_loss = 0
-
-                # Total loss
-                loss = reconstruction_loss + mmd_loss*tightness + prediction_loss + decoder_sparsity_loss
-
-                loss.backward()
-                optimizer.step()
-
-                trainloss_lst.append(loss.item()/len(x_input))
-                epochloss_lst.append(loss.item()/len(x_input))
-                if (iter+1) % 10 == 0:
-                    print(f'Epoch {(epoch+1):>3d}\tIter {(iter+1):>4d}\tLoss:{loss.item()/len(x_input):<.7f}\tRec Loss:{reconstruction_loss.item()/len(x_input):<.7f}\tMMD:{mmd_loss.item()*tightness/len(x_input):<.7f}\tSparsity_Loss:{decoder_sparsity_loss/len(x_input):<.7f}\tPred_Loss:{prediction_loss/len(x_input):<.7f}')
+            if test_data is not None:
+                self.epoch(test_data_loader,optimizer,epoch,print_every,w_prior,w_pred_loss,l1_beta,l1_beta_c,l1_beta_ci,validation=True)
             
             if (epoch+1) % log_every == 0:
                 save_name = f'../ckpt/GTM_K{self.n_topics}_{self.doc_topic_prior}_{self.decoder_type}_{self.predictor_type}_{time.strftime("%Y-%m-%d-%H-%M", time.localtime())}_{epoch+1}.ckpt'
@@ -327,7 +286,6 @@ class GTM:
                     }
                 }
                 torch.save(checkpoint,save_name)
-                print(f'Epoch {(epoch+1):>3d}\tLoss:{sum(epochloss_lst)/len(epochloss_lst):<.7f}')
                 print('\n'.join([str(lst) for lst in self.get_topic_word_distribution()]))   
 
             if self.update_prior:
@@ -336,6 +294,94 @@ class GTM:
 
             if self.decoder_type == 'sage':
                 l1_beta, l1_beta_c, l1_beta_ci = self.AutoEncoder.update_jeffreys_priors(n_train)
+
+    def epoch(self, data_loader, optimizer, epoch, print_every, w_prior, w_pred_loss, l1_beta,l1_beta_c,l1_beta_ci,validation=False):
+        """
+        Train the model for one epoch.
+        """
+        if validation:
+            self.AutoEncoder.eval()
+            if self.labels_size != 0:
+                self.predictor.eval()
+        else:
+            self.AutoEncoder.train()
+            if self.labels_size != 0:
+                self.predictor.train()
+        
+        epochloss_lst = []
+        for iter,data in enumerate(data_loader):
+            if not validation:
+                optimizer.zero_grad()
+
+            # Unpack data
+            for key, value in data.items():
+                data[key] = value.to(self.device) 
+            bows = data.get("M_bow", None)
+            bows = bows.reshape(bows.shape[0], -1)   
+            embeddings = data.get("M_embeddings", None)
+            prevalence_covariates = data.get("M_prevalence_covariates", None)
+            content_covariates = data.get("M_content_covariates", None)
+            target_labels = data.get("M_labels", None)
+            if self.encoder_input == 'bow':
+                x_input = bows
+            elif self.encoder_input == 'embeddings':
+                x_input = embeddings
+            x_bows = bows
+
+            # Get theta and compute reconstruction loss
+            x_recon, theta_q = self.AutoEncoder(x_input, prevalence_covariates, content_covariates, target_labels)
+            reconstruction_loss = F.cross_entropy(x_recon, x_bows)
+
+            # Get prior on theta and compute regularization loss
+            theta_prior = self.prior.sample(N=x_input.shape[0], M_prevalence_covariates=prevalence_covariates).to(self.device)
+            mmd_loss = compute_mmd_loss(theta_q, theta_prior, device=self.device, t=0.1)      
+
+            if self.w_prior is None:
+                mean_length = torch.sum(x_bows)/x_bows.shape[0]
+                vocab_size = x_bows.shape[1]
+                w_prior = mean_length * np.log(vocab_size) 
+            else:
+                w_prior = self.w_prior
+
+            # Add regularization to induce sparsity in the topic-word-covariate distributions
+            if self.decoder_type == 'sage':
+                decoder_sparsity_loss = self.AutoEncoder.sparsity_loss(l1_beta, l1_beta_c, l1_beta_ci, self.device)
+            else:
+                decoder_sparsity_loss = 0
+
+            # Predict labels and compute prediction loss
+            if target_labels is not None:
+                predictions = self.predictor(theta_q)
+                if self.predictor_type == 'classifier':
+                    prediction_loss = F.cross_entropy(
+                        predictions, target_labels
+                    )
+                elif self.predictor_type == 'regressor':
+                    prediction_loss = F.mse_loss(
+                        predictions, target_labels
+                    )
+            else:   
+                prediction_loss = 0
+
+            # Total loss
+            loss = reconstruction_loss + mmd_loss*w_prior + prediction_loss*w_pred_loss + decoder_sparsity_loss
+
+            if not validation:
+                loss.backward()
+                optimizer.step()
+
+            epochloss_lst.append(loss.item()/len(x_input))
+
+            if (iter+1) % print_every == 0:
+                if validation:
+                    print(f'Epoch {(epoch+1):>3d}\tIter {(iter+1):>4d}\tTotal Validation Loss:{loss.item()/len(x_input):<.7f}\tRec Loss:{reconstruction_loss.item()/len(x_input):<.7f}\tMMD Loss:{mmd_loss.item()*w_prior/len(x_input):<.7f}\tSparsity Loss:{decoder_sparsity_loss/len(x_input):<.7f}\tPred Loss:{prediction_loss*w_pred_loss/len(x_input):<.7f}')
+                else:
+                    print(f'Epoch {(epoch+1):>3d}\tIter {(iter+1):>4d}\tTotal Training Loss:{loss.item()/len(x_input):<.7f}\tRec Loss:{reconstruction_loss.item()/len(x_input):<.7f}\tMMD Loss:{mmd_loss.item()*w_prior/len(x_input):<.7f}\tSparsity Loss:{decoder_sparsity_loss/len(x_input):<.7f}\tPred Loss:{prediction_loss*w_pred_loss/len(x_input):<.7f}')
+
+        if validation:
+            print(f'Epoch {(epoch+1):>3d}\tValidation Loss:{sum(epochloss_lst)/len(epochloss_lst):<.7f}')
+        else:
+            print(f'Epoch {(epoch+1):>3d}\tTraining Loss:{sum(epochloss_lst)/len(epochloss_lst):<.7f}')
 
     def get_doc_topic_distribution(self, dataset):
         """
