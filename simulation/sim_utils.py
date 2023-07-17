@@ -8,7 +8,7 @@ import pandas as pd
 from scipy.optimize import linear_sum_assignment
 
 
-def matching_topic(model_type, score_method, num_simulations, **kwargs):
+def matching_topic(model_type, matching_by, **kwargs):
     """
     function for matching the true matrix and the estimated matrix \
     (by cosine similarity or correlation coefficient)
@@ -22,9 +22,9 @@ def matching_topic(model_type, score_method, num_simulations, **kwargs):
     """
 
     # TODO check if this assignment is fine, especially top10 keywords approach
-    if score_method in ["correlation", "cossim", "dot_product"]:
+    if matching_by in ["correlation", "cossim", "dot_product"]:
         dist_type = "doc_topic"
-    elif score_method == "keyword":
+    elif matching_by == "keyword":
         dist_type = "topic_word"
     else:
         raise ValueError(
@@ -61,99 +61,90 @@ def matching_topic(model_type, score_method, num_simulations, **kwargs):
     with open(true_path, "rb") as f:
         true_df = pickle.load(f)
 
-    for num in range(num_simulations):
-        temp_corres_num_topic_dict = {}
-        if model_type == "lda":
-            estimated_df_dist_name = "df_{}_{}.pickle".format(dist_type, num)
+    if model_type == "lda":
+        estimated_df_dist_name = "df_{}.pickle".format(dist_type)
 
-        else:
-            estimated_df_dist_name = "df_{}_{}_{}_{}.pickle".format(
-                dist_type, kwargs["doc_topic_prior"], kwargs["decoder_type"], num
-            )
-        estimated_n_path = (
-            current_dir.joinpath(
-                "..",
-                "data",
-                model_type,
-                estimated_df_dist_name,
-            )
-            .resolve()
-            .as_posix()
+    else:
+        estimated_df_dist_name = "df_{}_{}_{}.pickle".format(
+            dist_type, kwargs["doc_topic_prior"], kwargs["decoder_type"]
         )
-        with open(estimated_n_path, "rb") as f:
-            estimated_df = pickle.load(f)
-        if dist_type == "doc_topic":
-            score_list = []
-            for true_col in true_df.columns:
-                true_target_col = true_df.loc[:, true_col]
-                score_list_per_row = []
-                for col in estimated_df.columns:
-                    target_col = estimated_df.loc[:, col]
-                    if score_method == "correlation":
-                        score_list_per_row.append(
-                            np.corrcoef(target_col, true_target_col)[0][1]
-                        )
-                    elif score_method == "cossim":
-                        score_list_per_row.append(
-                            np.dot(target_col.T, true_target_col)
-                            / (
-                                np.linalg.norm(target_col)
-                                * np.linalg.norm(true_target_col)
-                            )
-                        )
-                    else:
-                        score_list_per_row.append(np.dot(target_col, true_target_col))
-                score_list.append(score_list_per_row)
-        else:
-            # TODO check if this logic is fine
-            score_list = []
-            true_topic_keywords_dict, estimated_topic_keywords_dict = {}, {}
-            for index in true_df.index:
-                true_word = true_df.loc[index, :]
-                score_list_per_row = []
-                true_topic_keywords_dict[index] = list(
-                    true_word.sort_values(ascending=False).index
-                )[:10]
-                estimated_word = estimated_df.loc[index, :]
-                estimated_topic_keywords_dict[index] = list(
-                    estimated_word.sort_values(ascending=False).index
-                )[:10]
-                estimated_word = estimated_df.loc[index, :]
-            for t_topic in true_topic_keywords_dict.keys():
-                score_list_per_index = []
-                true_words = true_topic_keywords_dict[t_topic]
-                for e_topic in estimated_topic_keywords_dict.keys():
-                    words = estimated_topic_keywords_dict[e_topic]
-                    counter = 0
-                    for word in words:
-                        if word in true_words:
-                            counter += 1
-                        score_list_per_index.append(counter / 10)
-                score_list.append(score_list_per_index)
+    estimated_path = (
+        current_dir.joinpath(
+            "..",
+            "data",
+            model_type,
+            estimated_df_dist_name,
+        )
+        .resolve()
+        .as_posix()
+    )
+    with open(estimated_path, "rb") as f:
+        estimated_df = pickle.load(f)
+    if dist_type == "doc_topic":
+        score_list = []
+        for true_col in true_df.columns:
+            true_target_col = true_df.loc[:, true_col]
+            score_list_per_row = []
+            for col in estimated_df.columns:
+                target_col = estimated_df.loc[:, col]
+                if matching_by == "correlation":
+                    score_list_per_row.append(
+                        np.corrcoef(target_col, true_target_col)[0][1]
+                    )
+                elif matching_by == "cossim":
+                    score_list_per_row.append(
+                        np.dot(target_col.T, true_target_col)
+                        / (np.linalg.norm(target_col) * np.linalg.norm(true_target_col))
+                    )
+                else:
+                    score_list_per_row.append(np.dot(target_col, true_target_col))
+            score_list.append(score_list_per_row)
+    else:
+        # TODO check if this logic is fine
+        score_list = []
+        true_topic_keywords_dict, estimated_topic_keywords_dict = {}, {}
+        for index in true_df.index:
+            true_word = true_df.loc[index, :]
+            score_list_per_row = []
+            true_topic_keywords_dict[index] = list(
+                true_word.sort_values(ascending=False).index
+            )[:10]
+            estimated_word = estimated_df.loc[index, :]
+            estimated_topic_keywords_dict[index] = list(
+                estimated_word.sort_values(ascending=False).index
+            )[:10]
+            estimated_word = estimated_df.loc[index, :]
+        for t_topic in true_topic_keywords_dict.keys():
+            score_list_per_index = []
+            true_words = true_topic_keywords_dict[t_topic]
+            for e_topic in estimated_topic_keywords_dict.keys():
+                words = estimated_topic_keywords_dict[e_topic]
+                counter = 0
+                for word in words:
+                    if word in true_words:
+                        counter += 1
+                    score_list_per_index.append(counter / 10)
+            score_list.append(score_list_per_index)
 
-        score_matrix = pd.DataFrame(score_list)
-        true_topics, estimated_topics = linear_sum_assignment(-score_matrix)
+    score_matrix = pd.DataFrame(score_list)
+    true_topics, estimated_topics = linear_sum_assignment(-score_matrix)
 
-        for true_topic, estimated_topic in zip(true_topics, estimated_topics):
-            temp_corres_num_topic_dict["Topic{}".format(true_topic)] = "Topic{}".format(
-                estimated_topic
-            )
-
-        corres_num_topic_dict[num] = temp_corres_num_topic_dict
+    for true_topic, estimated_topic in zip(true_topics, estimated_topics):
+        corres_num_topic_dict["Topic{}".format(true_topic)] = "Topic{}".format(
+            estimated_topic
+        )
 
     return corres_num_topic_dict
 
 
-def calculate_score(
-    model_type, score_type, num_simulations, corres_num_topic_dict, **kwargs
-):
+def calculate_score(model_type, score_type, corres_num_topic_dict, **kwargs):
     """
     A function for calculating the scoring
     input
         score_type: "correlation", "euclid", "cossim", "keywords"
 
         corres_num_topic_dict (output of creating_dict_for_topic_correspondence)
-            {num_sim : {estimated_topic_idx: true_topic}}}
+            {estimated_topic_idx: true_topic}
     """
     if score_type in ["correlation", "euclid", "cossim"]:
         dist_type = "doc_topic"
@@ -168,20 +159,18 @@ def calculate_score(
     def _rearange_estimated_df(
         df,
         corres_num_topic_dict,
-        num_sim,
         dist_type,
     ):
         """
         inner function for rearanging an estimated matrix referencing the true matrix
         """
 
-        corres_dict = corres_num_topic_dict[num_sim]
         if dist_type == "doc_topic":
-            reanged_df = df.loc[:, corres_dict.values()]
-            reanged_df.columns = corres_dict.keys()
+            reanged_df = df.loc[:, corres_num_topic_dict.values()]
+            reanged_df.columns = corres_num_topic_dict.keys()
         else:
-            reanged_df = df.loc[corres_dict.values(), :]
-            reanged_df.index = corres_dict.keys()
+            reanged_df = df.loc[corres_num_topic_dict.values(), :]
+            reanged_df.index = corres_num_topic_dict.keys()
 
         return reanged_df
 
@@ -233,7 +222,6 @@ def calculate_score(
 
     p = pathlib.Path()
     current_dir = p.cwd()
-    model_type = "{}".format(model_type)
 
     if model_type == "lda":
         true_df_dist_name = "true_df_{}.pickle".format(dist_type)
@@ -249,148 +237,34 @@ def calculate_score(
     with open(true_df_dist_path, "rb") as f:
         true_df_dist = pickle.load(f)
 
-    score_list = []
-    for num_sim in range(num_simulations):
-        if model_type == "lda":
-            target_df_dist_name = "df_{}_{}.pickle".format(dist_type, num_sim)
-        else:
-            target_df_dist_name = "df_{}_{}_{}_{}.pickle".format(
-                dist_type,
-                kwargs["doc_topic_prior"],
-                kwargs["decoder_type"],
-                num_sim,
-            )
-        target_df_dist_path = (
-            current_dir.joinpath(
-                "..",
-                "data",
-                model_type,
-                target_df_dist_name,
-            )
-            .resolve()
-            .as_posix()
+    if model_type == "lda":
+        target_df_dist_name = "df_{}.pickle".format(
+            dist_type,
         )
-        with open(target_df_dist_path, "rb") as f:
-            estimated_df_dist = pickle.load(f)
-
-        reanged_df = _rearange_estimated_df(
-            df=estimated_df_dist,
-            corres_num_topic_dict=corres_num_topic_dict,
-            num_sim=num_sim,
-            dist_type=dist_type,
-        )
-        res = _calc_score_from_two_df(
-            score_type=score_type, df1=true_df_dist, df2=reanged_df
-        )
-        score_list.append(res)
-
-    if dist_type == "doc_topic":
-        df_score = pd.DataFrame(score_list, columns=true_df_dist.columns)
     else:
-        df_score = pd.DataFrame(score_list, columns=true_df_dist.index)
+        target_df_dist_name = "df_{}_{}_{}.pickle".format(
+            dist_type, kwargs["doc_topic_prior"], kwargs["decoder_type"]
+        )
+    target_df_dist_path = (
+        current_dir.joinpath(
+            "..",
+            "data",
+            model_type,
+            target_df_dist_name,
+        )
+        .resolve()
+        .as_posix()
+    )
+    with open(target_df_dist_path, "rb") as f:
+        estimated_df_dist = pickle.load(f)
 
-    return df_score
+    reanged_df = _rearange_estimated_df(
+        df=estimated_df_dist,
+        corres_num_topic_dict=corres_num_topic_dict,
+        dist_type=dist_type,
+    )
+    res = _calc_score_from_two_df(
+        score_type=score_type, df1=true_df_dist, df2=reanged_df
+    )
 
-
-# def creating_dict_for_topic_correspondence(
-#     match_method, dist_type, num_iters, num_simulations, num_topics
-# ):
-#     """
-#     function for checking the topic correspondence \
-#     between the true matrix and the estimated matrix \
-#     (by cosine similarity or correlation coefficient)
-#         1. column of doc-topic matrix
-#         2. the row of topic-word matrix
-
-#     Check if the matching from 1. and 2. are the same
-
-#     If it is impossible to match completely, \
-#     we exclude it from measuing the simulation performance
-
-#     output:
-#         valid_simulation_dict
-#             {iter: [which simulation is complete enough to simulate]}
-#         corres_num_topic_dict
-#             {iter : {num_sim : {true_topic_idx: estimated_topic_name}}}
-#     """
-#     if match_method not in ["correlation", "cossim"]:
-#         raise ValueError("Only two options for matching:correlation, cossim.")
-#     if dist_type not in ["doc_topic", "topic_word"]:
-#         raise ValueError(
-#             "Only two distributions are supported: \
-#             doc_topic or topic_word."
-#         )
-
-#     p = pathlib.Path()
-#     current_dir = p.cwd()
-#     valid_simulation_dict = {}
-#     corres_num_topic_dict = {}
-
-#     for n_iter in range(num_iters):
-#         sub_corres_num_topic_dict = {}
-#         iter_name = "iter_{}".format(n_iter)
-#         true_path = (
-#             current_dir.joinpath(
-#                 "data", iter_name, "true_df_{}.pickle".format(dist_type)
-#             )
-#             .resolve()
-#             .as_posix()
-#         )
-#         with open(true_path, "rb") as f:
-#             true_df = pickle.load(f)
-
-#         valid_sim_nums_list = []
-#         for num in range(num_simulations):
-#             match_key = []
-#             temp_corres_num_topic_dict = {}
-#             estimated_n_path = (
-#                 current_dir.joinpath(
-#                     "data", iter_name, "df_{}_{}.pickle".format(dist_type, num)
-#                 )
-#                 .resolve()
-#                 .as_posix()
-#             )
-#             with open(estimated_n_path, "rb") as f:
-#                 df_n = pickle.load(f)
-
-#             if dist_type == "doc_topic":
-#                 for true_col in true_df.columns:
-#                     true_target_col = true_df.loc[:, true_col]
-#                     res = {}
-#                     for i, col in enumerate(df_n.columns):
-#                         target_col = df_n.loc[:, col]
-#                         if match_method == "correlation":
-#                             res[i] = np.corrcoef(target_col, true_target_col)[0][1]
-#                         else:
-#                             res[i] = np.dot(target_col.T, true_target_col) / (
-#                                 np.linalg.norm(target_col)
-#                                 * np.linalg.norm(true_target_col)
-#                             )
-#                     key, _ = max(res.items(), key=lambda x: x[1])
-#                     match_key.append(key)
-#                     temp_corres_num_topic_dict[true_col] = "Topic{}".format(key)
-#             else:
-#                 for true_idx in true_df.index:
-#                     true_target_idx = true_df.loc[true_idx, :]
-#                     res = {}
-#                     for i, idx in enumerate(df_n.index):
-#                         target_idx = df_n.loc[idx, :]
-#                         if match_method == "correlation":
-#                             res[i] = np.corrcoef(target_idx, true_target_idx)[0][1]
-#                         else:
-#                             res[i] = np.dot(target_idx.T, true_target_idx) / (
-#                                 np.linalg.norm(target_idx)
-#                                 * np.linalg.norm(true_target_idx)
-#                             )
-#                     key, _ = max(res.items(), key=lambda x: x[1])
-#                     match_key.append(key)
-#                     temp_corres_num_topic_dict[true_idx] = "Topic{}".format(key)
-
-#             if len(set(match_key)) == num_topics:
-#                 valid_sim_nums_list.append(num)
-#                 sub_corres_num_topic_dict[num] = temp_corres_num_topic_dict
-
-#         valid_simulation_dict[num] = valid_sim_nums_list
-#         corres_num_topic_dict[num] = sub_corres_num_topic_dict
-
-#     return valid_simulation_dict, corres_num_topic_dict
+    return res

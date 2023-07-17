@@ -12,11 +12,13 @@ from tqdm import tqdm
 
 def generate_docs_by_lda(
     num_topics,
+    seed,
     alpha=None,
     beta=None,
     doc_args=None,
     is_output=True,
 ):
+    np.random.seed(seed)
     default_data_args_dict = {
         "min_words": 50,
         "max_words": 100,
@@ -57,14 +59,6 @@ def generate_docs_by_lda(
             word = np.random.choice(words, p=word_pro)
             sentence.append(word)
         docs.append(" ".join(sentence))
-
-        # top_pro = df_doc_topic.loc[docname, :]
-        # topic_list = [np.random.choice(topicnames, p=top_pro) for _ in range(num_words)]
-        # for topic in topic_list:
-        #     word_pro = df_topic_word.loc[topic, :]
-        #     word = np.random.choice(words, p=word_pro)
-        #     sentence.append(word)
-        # docs.append(" ".join(sentence))
 
     if is_output:
         p = pathlib.Path()
@@ -119,7 +113,6 @@ def _create_input_for_lda_from_generated_docs(data):
 def estimate_dist_by_lda(
     data,
     num_topics,
-    num_silulations,
     voc_size,
     model_args=None,
     is_output=True,
@@ -159,43 +152,42 @@ def estimate_dist_by_lda(
         )
         col_words = ["word_{}".format(i) for i in range(voc_size)]
 
-        df_topic_word_reordered = df_topic_word.loc[:, col_words]
+        df_topic_word_reordered = df_topic_word.reindex(columns=col_words).fillna(0)
 
         return df_topic_word_reordered
 
-    for i in tqdm(range(num_silulations)):
-        id2word, corpus = _create_input_for_lda_from_generated_docs(data)
-        lda_model = gensim.models.ldamodel.LdaModel(
-            corpus=corpus,
-            id2word=id2word,
-            num_topics=num_topics,
-            **model_args,
+    id2word, corpus = _create_input_for_lda_from_generated_docs(data)
+    lda_model = gensim.models.ldamodel.LdaModel(
+        corpus=corpus,
+        id2word=id2word,
+        num_topics=num_topics,
+        **model_args,
+    )
+    df_doc_topic = _estimate_doctopic_dist_by_lda(lda_model, corpus)
+    df_doc_topic_list.append(df_doc_topic)
+    df_topic_word = _estimate_topicword_dist_by_lda(lda_model, id2word, voc_size)
+    df_topic_word_list.append(df_topic_word)
+    if is_output:
+        p = pathlib.Path()
+        current_dir = p.cwd()
+        if not current_dir.joinpath("..", "data", "lda").exists():
+            current_dir.joinpath("..", "data", "lda").mkdir()
+        name_df_doc_topic = "df_doc_topic.pickle"
+        df_doc_topic_path = (
+            current_dir.joinpath("..", "data", "lda", name_df_doc_topic)
+            .resolve()
+            .as_posix()
         )
-        df_doc_topic = _estimate_doctopic_dist_by_lda(lda_model, corpus)
-        df_doc_topic_list.append(df_doc_topic)
-        df_topic_word = _estimate_topicword_dist_by_lda(lda_model, id2word, voc_size)
-        df_topic_word_list.append(df_topic_word)
-        if is_output:
-            p = pathlib.Path()
-            current_dir = p.cwd()
-            if not current_dir.joinpath("..", "data", "lda").exists():
-                current_dir.joinpath("..", "data", "lda").mkdir()
-            name_df_doc_topic = "df_doc_topic_" + str(i) + ".pickle"
-            df_doc_topic_path = (
-                current_dir.joinpath("..", "data", "lda", name_df_doc_topic)
-                .resolve()
-                .as_posix()
-            )
-            name_df_topic_word = "df_topic_word_" + str(i) + ".pickle"
-            df_topic_word_path = (
-                current_dir.joinpath("..", "data", "lda", name_df_topic_word)
-                .resolve()
-                .as_posix()
-            )
+        name_df_topic_word = "df_topic_word.pickle"
+        df_topic_word_path = (
+            current_dir.joinpath("..", "data", "lda", name_df_topic_word)
+            .resolve()
+            .as_posix()
+        )
 
-            with open(df_doc_topic_path, "wb") as f:
-                pickle.dump(df_doc_topic, f)
-            with open(df_topic_word_path, "wb") as f:
-                pickle.dump(df_topic_word, f)
+        with open(df_doc_topic_path, "wb") as f:
+            pickle.dump(df_doc_topic, f)
+        with open(df_topic_word_path, "wb") as f:
+            pickle.dump(df_topic_word, f)
 
     return df_doc_topic_list, df_topic_word_list
