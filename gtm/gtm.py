@@ -155,6 +155,10 @@ class GTM:
 
         if train_data.labels is not None:
             labels_size = train_data.M_labels.shape[1]
+            if predictor_type == 'classifier':
+                n_labels = len(np.unique(train_data.M_labels))
+            else:
+                n_labels = 1
         else:
             labels_size = 0
 
@@ -210,7 +214,7 @@ class GTM:
         if labels_size != 0:
             predictor_dims = [n_topics]
             predictor_dims.extend(predictor_hidden_layers)
-            predictor_dims.extend([labels_size])
+            predictor_dims.extend([n_labels])
             self.predictor = Predictor(
                 predictor_dims=predictor_dims,
                 predictor_non_linear_activation=predictor_non_linear_activation,
@@ -286,7 +290,8 @@ class GTM:
                     }
                 }
                 torch.save(checkpoint,save_name)
-                print('\n'.join([str(lst) for lst in self.get_topic_word_distribution()]))   
+                print('\n'.join([str(lst) for lst in self.get_topic_word_distribution()])) 
+                print('\n')  
 
             if self.update_prior:
                 posterior_theta = self.get_doc_topic_distribution(train_data)
@@ -352,6 +357,10 @@ class GTM:
             # Predict labels and compute prediction loss
             if target_labels is not None:
                 predictions = self.predictor(theta_q)
+                #y_pred_probs = torch.softmax(predictions, dim=1) 
+                #print(y_pred_probs)
+                if self.predictor_type == 'classifier':
+                    target_labels = target_labels.squeeze().to(torch.int64)
                 if self.predictor_type == 'classifier':
                     prediction_loss = F.cross_entropy(
                         predictions, target_labels
@@ -374,14 +383,14 @@ class GTM:
 
             if (iter+1) % print_every == 0:
                 if validation:
-                    print(f'Epoch {(epoch+1):>3d}\tIter {(iter+1):>4d}\tTotal Validation Loss:{loss.item()/len(x_input):<.7f}\tRec Loss:{reconstruction_loss.item()/len(x_input):<.7f}\tMMD Loss:{mmd_loss.item()*w_prior/len(x_input):<.7f}\tSparsity Loss:{decoder_sparsity_loss/len(x_input):<.7f}\tPred Loss:{prediction_loss*w_pred_loss/len(x_input):<.7f}')
+                    print(f'Epoch {(epoch+1):>3d}\tIter {(iter+1):>4d}\tValidation Loss:{loss.item()/len(x_input):<.7f}\nRec Loss:{reconstruction_loss.item()/len(x_input):<.7f}\nMMD Loss:{mmd_loss.item()*w_prior/len(x_input):<.7f}\nSparsity Loss:{decoder_sparsity_loss/len(x_input):<.7f}\nPred Loss:{prediction_loss*w_pred_loss/len(x_input):<.7f}\n')
                 else:
-                    print(f'Epoch {(epoch+1):>3d}\tIter {(iter+1):>4d}\tTotal Training Loss:{loss.item()/len(x_input):<.7f}\tRec Loss:{reconstruction_loss.item()/len(x_input):<.7f}\tMMD Loss:{mmd_loss.item()*w_prior/len(x_input):<.7f}\tSparsity Loss:{decoder_sparsity_loss/len(x_input):<.7f}\tPred Loss:{prediction_loss*w_pred_loss/len(x_input):<.7f}')
+                    print(f'Epoch {(epoch+1):>3d}\tIter {(iter+1):>4d}\tTraining Loss:{loss.item()/len(x_input):<.7f}\nRec Loss:{reconstruction_loss.item()/len(x_input):<.7f}\nMMD Loss:{mmd_loss.item()*w_prior/len(x_input):<.7f}\nSparsity Loss:{decoder_sparsity_loss/len(x_input):<.7f}\nPred Loss:{prediction_loss*w_pred_loss/len(x_input):<.7f}\n')
 
         if validation:
-            print(f'Epoch {(epoch+1):>3d}\tValidation Loss:{sum(epochloss_lst)/len(epochloss_lst):<.7f}')
+            print(f'\nEpoch {(epoch+1):>3d}\tMean Validation Loss:{sum(epochloss_lst)/len(epochloss_lst):<.7f}\n')
         else:
-            print(f'Epoch {(epoch+1):>3d}\tTraining Loss:{sum(epochloss_lst)/len(epochloss_lst):<.7f}')
+            print(f'\nEpoch {(epoch+1):>3d}\tMean Training Loss:{sum(epochloss_lst)/len(epochloss_lst):<.7f}\n')
 
     def get_doc_topic_distribution(self, dataset):
         """
