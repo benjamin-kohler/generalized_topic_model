@@ -48,7 +48,7 @@ def generate_docs_by_lda(
 
     docs = []
     for docname in tqdm(docnames):
-        sentence = []
+        doc = []
         num_words = np.random.randint(
             default_data_args_dict["min_words"], default_data_args_dict["max_words"]
         )
@@ -57,8 +57,8 @@ def generate_docs_by_lda(
         for topic in topic_list:
             word_pro = df_topic_word.loc[topic, :]
             word = np.random.choice(words, p=word_pro)
-            sentence.append(word)
-        docs.append(" ".join(sentence))
+            doc.append(word)
+        docs.append(" ".join(doc))
 
     if is_output:
         p = pathlib.Path()
@@ -92,22 +92,6 @@ def generate_docs_by_lda(
             pickle.dump(docs, f)
 
     return df_true_dist_list, docs
-
-
-def _create_input_for_lda_from_generated_docs(data):
-    """
-    input
-        generated_new_docs[list]
-    output
-        generated_id2word, generated_corpus
-
-    """
-    split_data = [sentence.split(" ") for sentence in data]
-
-    id2word = corpora.Dictionary(split_data)
-    corpus = [id2word.doc2bow(text) for text in split_data]
-
-    return id2word, corpus
 
 
 def estimate_dist_by_lda(
@@ -156,6 +140,21 @@ def estimate_dist_by_lda(
 
         return df_topic_word_reordered
 
+    def _create_input_for_lda_from_generated_docs(data):
+        """
+        input
+            generated_new_docs[list]
+        output
+            generated_id2word, generated_corpus
+
+        """
+        split_data = [sentence.split(" ") for sentence in data]
+
+        id2word = corpora.Dictionary(split_data)
+        corpus = [id2word.doc2bow(text) for text in split_data]
+
+        return id2word, corpus
+
     id2word, corpus = _create_input_for_lda_from_generated_docs(data)
     lda_model = gensim.models.ldamodel.LdaModel(
         corpus=corpus,
@@ -167,6 +166,7 @@ def estimate_dist_by_lda(
     df_doc_topic_list.append(df_doc_topic)
     df_topic_word = _estimate_topicword_dist_by_lda(lda_model, id2word, voc_size)
     df_topic_word_list.append(df_topic_word)
+
     if is_output:
         p = pathlib.Path()
         current_dir = p.cwd()

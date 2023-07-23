@@ -1,5 +1,5 @@
 #
-# このファイルは不要な可能性が高い
+# this file will be deleted
 #
 
 # Standard Library

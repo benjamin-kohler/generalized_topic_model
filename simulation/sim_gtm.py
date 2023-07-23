@@ -6,6 +6,7 @@ import pickle
 import numpy as np
 import pandas as pd
 from corpus import GTMCorpus
+from patsy import dmatrix
 from tqdm import tqdm
 
 # First Party Library
@@ -47,28 +48,40 @@ def generate_docs_by_gtm(
     for k in default_data_args_dict.keys():
         if k not in doc_args.keys():
             doc_args[k] = default_data_args_dict[k]
-    lambda_ = np.random.rand(doc_args["num_content_covs"], num_topics)
-    lambda_ = lambda_ - lambda_[:, 0][:, None]
 
-    prevalence_categories = [i for i in range(doc_args["num_prev_covs"])]
-    prevalence_categories_of_each_doc = np.random.choice(
-        prevalence_categories, size=doc_args["num_docs"], replace=True
-    ).tolist()
-    prevalence_covariates = np.eye(len(prevalence_categories))[
-        prevalence_categories_of_each_doc
-    ]
+    def _create_categorical_data(cov_nums, num_docs):
+        categories = [i for i in range(cov_nums)]
+        categories_of_each_doc = np.random.choice(
+            categories, size=num_docs, replace=True
+        ).tolist()
+        df_categ = pd.DataFrame({"cov": categories_of_each_doc})
+        categorical_covariates = dmatrix("~cov", data=df_categ)
+        return categories_of_each_doc, categorical_covariates
+
+    # def _create_categorical_data2(cov_nums, num_docs):
+    #     categories = [i for i in range(cov_nums)]
+    #     categories_of_each_doc = np.random.choice(
+    #         categories, size=num_docs, replace=True
+    #     ).tolist()
+    #     onehot_covariates = np.eye(len(categories))[categories_of_each_doc]
+    #     return categories_of_each_doc, onehot_covariates
+
+    lambda_ = 2 * np.random.rand(doc_args["num_content_covs"], num_topics) - 1
+    # lambda_ = lambda_ - lambda_[:, 0][:, None]
+
+    prevalence_categories_of_each_doc, prevalence_covariates = _create_categorical_data(
+        doc_args["num_prev_covs"], doc_args["num_docs"]
+    )
 
     # for doc_topic matrix
     if doc_topic_prior == "logistic_normal":
         sqrt_sigma = np.random.rand(num_topics, num_topics)
         sigma = sqrt_sigma * sqrt_sigma.T
-
         doc_topic_raw_list = []
         for i in range(doc_args["num_docs"]):
             mean = np.exp(np.dot(prevalence_covariates[i, :].T, lambda_))
             doc_topic_raw_list.append(np.random.multivariate_normal(mean, sigma))
         doc_topic_pro_raw = np.array(doc_topic_raw_list)
-
         doc_topic_pro = np.exp(doc_topic_pro_raw) / np.sum(
             np.exp(doc_topic_pro_raw), axis=1, keepdims=True
         )
@@ -79,18 +92,16 @@ def generate_docs_by_gtm(
             doc_topic_pro_list.append(np.random.dirichlet(diri_param))
         doc_topic_pro = np.array(doc_topic_pro_list)
 
-    content_categories = [i for i in range(doc_args["num_content_covs"])]
-    content_categories_of_each_doc = np.random.choice(
-        content_categories, size=doc_args["num_docs"], replace=True
-    ).tolist()
-    content_covariates = np.eye(len(content_categories))[content_categories_of_each_doc]
+    content_categories_of_each_doc, content_covariates = _create_categorical_data(
+        doc_args["num_content_covs"], doc_args["num_docs"]
+    )
 
-    # for topic_word matrix
+    # for baseline topic_word matrix
     topic_word_pro = np.random.dirichlet(
         [0.1 for _ in range(doc_args["voc_size"])], num_topics
     )
 
-    # for doc_word matrix (not needed?)
+    # for doc_word matrix
     if decoder_type == "sage":
         if decoder_estimate_interactions:
             b = np.random.rand(doc_args["num_docs"], doc_args["voc_size"])
@@ -136,30 +147,38 @@ def generate_docs_by_gtm(
     df_doc_word = pd.DataFrame(doc_word_pro, index=docnames, columns=words)
     df_true_dist_list = [df_doc_topic, df_topic_word]
 
-    doc = []
-    for docname in tqdm(docnames):
-        sentence = []
-        num_words = np.random.randint(
-            low=default_data_args_dict["min_words"],
-            high=default_data_args_dict["max_words"] + 1,
-        )
-        top_pro = df_doc_topic.loc[docname, :]
-        topic_list = [np.random.choice(topicnames, p=top_pro) for _ in range(num_words)]
-        for topic in topic_list:
-            word_pro = df_topic_word.loc[topic, :]
-            word = np.randomd.choice(words, p=word_pro)
-            sentence.append(word)
-        doc.append(" ".join(sentence))
+    # docs = []
+    # for docname in tqdm(docnames):
+    #     doc = []
+    #     num_words = np.random.randint(
+    #         low=doc_args["min_words"],
+    #         high=doc_args["max_words"] + 1,
+    #     )
+    #     top_pro = df_doc_topic.loc[docname, :]
+    #     topic_list = [np.random.choice(topicnames, p=top_pro) for _ in range(num_words)]
+    #     for topic in topic_list:
+    #         word_pro = df_topic_word.loc[topic, :]
+    #         word = np.random.choice(words, p=word_pro)
+    #         doc.append(word)
+    #     docs.append(" ".join(doc))
 
-    # original_dataset_dict = {
-    #     "doc": doc,
-    #     "prevalence_covariates": prevalence_categories_of_each_doc,
-    #     "content_covariates": content_categories_of_each_doc,
-    # }
+    docs = []
+    for docname in tqdm(docnames):
+        num_words = np.random.randint(
+            low=doc_args["min_words"],
+            high=doc_args["max_words"] + 1,
+        )
+        word_pro_per_doc = df_doc_word.loc[docname, :]
+        docs.append(
+            " ".join(
+                [np.random.choice(words, p=word_pro_per_doc) for _ in range(num_words)]
+            )
+        )
+
     original_dataset_dict = {
-        "doc": doc,
+        "doc": docs,
         "prevalence_covariates": prevalence_categories_of_each_doc,
-        "content_covariates": prevalence_categories_of_each_doc,
+        "content_covariates": content_categories_of_each_doc,
     }
 
     if is_output:
