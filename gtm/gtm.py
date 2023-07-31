@@ -397,7 +397,7 @@ class GTM:
         Get the topic distribution of each document in the corpus.
         """
         with torch.no_grad():
-            data_loader = DataLoader(dataset,batch_size=self.batch_size,shuffle=True,num_workers=4)
+            data_loader = DataLoader(dataset,batch_size=self.batch_size,shuffle=False,num_workers=4)
             final_thetas = []
             for iter,data in enumerate(data_loader):
                 for key, value in data.items():
