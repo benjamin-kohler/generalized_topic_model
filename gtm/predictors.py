@@ -1,8 +1,6 @@
-# Third Party Library
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-
 
 class Predictor(nn.Module):
     """
@@ -12,6 +10,7 @@ class Predictor(nn.Module):
     """
 
     def __init__(
+<<<<<<< HEAD
         self,
         predictor_dims=[20, 512, 1024],
         predictor_non_linear_activation="relu",
@@ -34,33 +33,22 @@ class Predictor(nn.Module):
 
         self.dropout = nn.Dropout(p=dropout)
         if predictor_non_linear_activation is not None:
-            self.encoder_nonlin = {"relu": F.relu, "sigmoid": torch.sigmoid}[
-                predictor_non_linear_activation
-            ]
+            self.encoder_nonlin = {'relu': F.relu, 'sigmoid': torch.sigmoid}[predictor_non_linear_activation]
         if predictor_non_linear_activation is not None:
-            self.decoder_nonlin = {"relu": F.relu, "sigmoid": torch.sigmoid}[
-                predictor_non_linear_activation
-            ]
+            self.decoder_nonlin = {'relu': F.relu, 'sigmoid': torch.sigmoid}[predictor_non_linear_activation]
 
-        self.neural_net = nn.ModuleDict(
-            {
-                f"pred_{i}": nn.Linear(
-                    predictor_dims[i], predictor_dims[i + 1], bias=predictor_bias
-                )
-                for i in range(len(predictor_dims) - 1)
-            }
-        )
+        self.neural_net = nn.ModuleDict({
+            f'pred_{i}': nn.Linear(predictor_dims[i], predictor_dims[i+1], bias = predictor_bias)
+            for i in range(len(predictor_dims)-1)
+        })
 
     def forward(self, x):
         """
         Forward pass.
         """
         hid = x
-        for i, (_, layer) in enumerate(self.neural_net.items()):
+        for i, (_,layer) in enumerate(self.neural_net.items()):
             hid = self.dropout(layer(hid))
-            if (
-                i < len(self.neural_net) - 1
-                and self.predictor_non_linear_activation is not None
-            ):
+            if i < len(self.neural_net)-1 and self.predictor_non_linear_activation is not None:
                 hid = self.encoder_nonlin(hid)
         return hid
