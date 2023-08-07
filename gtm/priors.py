@@ -133,16 +133,18 @@ class DirichletPrior(Prior):
         - Mimno, D. M., & McCallum, A. (2008, July). Topic models conditioned on arbitrary features with Dirichlet-multinomial regression. In UAI (Vol. 24, pp. 411-418).
         - Maier, M. (2014). DirichletReg: Dirichlet regression for compositional data in R.
     """
-    def __init__(self, prevalence_covariates_size, n_topics, alpha, device):
+    def __init__(self, prevalence_covariates_size, n_topics, alpha, prevalence_covariates_regularization, tol, device):
         self.prevalence_covariates_size = prevalence_covariates_size
         self.n_topics = n_topics
         self.alpha = alpha
+        self.prevalence_covariates_regularization = prevalence_covariates_regularization
+        self.tol = tol
         self.lambda_ = None
         self.device = device
         if prevalence_covariates_size != 0:
             self.linear_model = LinearModel(prevalence_covariates_size, n_topics).to(self.device)
         
-    def update_parameters(self, posterior_theta, M_prevalence_covariates, num_epochs=1000):
+    def update_parameters(self, posterior_theta, M_prevalence_covariates, MLE=True):
         """
         M-step after each epoch.
         """
@@ -150,42 +152,49 @@ class DirichletPrior(Prior):
         # Simple Conditional Means Estimation
         # (fast educated guess)
         y = np.log(posterior_theta + 1e-6)
-        reg = linear_model.Ridge(alpha=0, fit_intercept=False)
+        reg = linear_model.Ridge(alpha=self.prevalence_covariates_regularization, fit_intercept=False)
         self.lambda_ = reg.fit(M_prevalence_covariates, y).coef_.T
         self.lambda_ = self.lambda_ - self.lambda_[:,0][:,None] 
 
         # Maximum Likelihood Estimation (MLE)
         # (pretty slow)
-        if num_epochs != 0:
-            self.lambda_ = torch.from_numpy(self.lambda_).float().to(self.device)
-            posterior_theta = torch.from_numpy(posterior_theta).float().to(self.device)
-            M_prevalence_covariates = torch.from_numpy(M_prevalence_covariates).float().to(self.device)
-            with torch.no_grad():
-                self.linear_model.linear.weight.copy_(self.lambda_.T)
-            optimizer = torch.optim.Adam(self.linear_model.parameters(), lr=1e-3)
-            for i in range(num_epochs):
+        self.lambda_ = torch.from_numpy(self.lambda_).float().to(self.device)
+        posterior_theta = torch.from_numpy(posterior_theta).float().to(self.device)
+        M_prevalence_covariates = torch.from_numpy(M_prevalence_covariates).float().to(self.device)
+        with torch.no_grad():
+            self.linear_model.linear.weight.copy_(self.lambda_.T)
+        optimizer = torch.optim.Adam(self.linear_model.parameters(), lr=1e-3, weight_decay=self.prevalence_covariates_regularization)
+
+        previous_loss = 0
+        if MLE:
+            while True:
+                
                 optimizer.zero_grad()
                 linear_preds = self.linear_model(M_prevalence_covariates)
                 alphas = torch.exp(linear_preds)
                 loss = -compute_dirichlet_likelihood(alphas, posterior_theta)
                 loss.backward()
-                optimizer.step()    
-            
-            self.lambda_ = self.linear_model.linear.weight.detach().T
-            self.lambda_ = self.lambda_ - self.lambda_[:,0][:,None]
-            self.lambda_ = self.lambda_.cpu().numpy()
+                optimizer.step()
+
+                if torch.abs(loss-previous_loss) < self.tol:
+                    break 
+                
+                previous_loss = loss
+                
+                self.lambda_ = self.linear_model.linear.weight.detach().T
+                self.lambda_ = self.lambda_ - self.lambda_[:,0][:,None]
+                self.lambda_ = self.lambda_.cpu().numpy()
     
-    def sample(self, N, M_prevalence_covariates):
+    def sample(self, N, M_prevalence_covariates, epoch=0):
         """
         Sample from the prior.
         """
-        if self.prevalence_covariates_size == 0:
+        if self.prevalence_covariates_size == 0 or epoch == 0:
             z_true = np.random.dirichlet(np.ones(self.n_topics)*self.alpha, size=N)
             z_true = torch.from_numpy(z_true).float()
         else:
             with torch.no_grad():
                 linear_preds = self.linear_model(M_prevalence_covariates)
-                # alphas = F.softmax(linear_preds, dim=1)
                 alphas = torch.exp(linear_preds)
                 for i in range(alphas.shape[0]):
                     if i == 0:

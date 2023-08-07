@@ -16,7 +16,6 @@ from utils import compute_mmd_loss
 # TO-DO:
 # multilingual tests
 # integrate with OCTIS
-# application to the U.S. congressional record
 
 class GTM:
     """
@@ -31,6 +30,7 @@ class GTM:
             update_prior=False,
             alpha=0.1,
             prevalence_covariates_regularization=0,
+            tol = 0.001,
             encoder_input='bow', 
             encoder_hidden_layers=[1024,512],
             encoder_non_linear_activation='relu',
@@ -68,6 +68,7 @@ class GTM:
             update_prior: whether to update the prior at each epoch to account for prevalence covariates.
             alpha: parameter of the Dirichlet prior (only used if update_prior=False)
             prevalence_covariates_regularization: regularization parameter for the logistic normal prior (only used if update_prior=True)
+            tol: tolerance threshold to stop the MLE of the Dirichlet prior (only used if update_prior=True)
             encoder_input: input to the encoder. Either 'bow' or 'embeddings'. 'bow' is a simple Bag-of-Words representation of the documents. 'embeddings' is the representation from a pre-trained embedding model (e.g. GPT, BERT, GloVe, etc.).
             encoder_hidden_layers: list with the size of the hidden layers for the encoder.
             encoder_non_linear_activation: non-linear activation function for the encoder.
@@ -104,6 +105,7 @@ class GTM:
         self.update_prior = update_prior
         self.alpha = alpha
         self.prevalence_covariates_regularization = prevalence_covariates_regularization
+        self.tol = tol
         self.encoder_input = encoder_input
         self.encoder_hidden_layers = encoder_hidden_layers
         self.encoder_non_linear_activation = encoder_non_linear_activation
@@ -207,7 +209,7 @@ class GTM:
             ).to(self.device)
 
         if doc_topic_prior == 'dirichlet':
-            self.prior = DirichletPrior(prevalence_covariate_size, n_topics, alpha, device=self.device)
+            self.prior = DirichletPrior(prevalence_covariate_size, n_topics, alpha, prevalence_covariates_regularization, tol, device=self.device)
         elif doc_topic_prior == 'logistic_normal':
             self.prior = LogisticNormalPrior(prevalence_covariate_size, n_topics, prevalence_covariates_regularization, device=self.device)
 
@@ -338,7 +340,7 @@ class GTM:
             reconstruction_loss = F.cross_entropy(x_recon, x_bows)
 
             # Get prior on theta and compute regularization loss
-            theta_prior = self.prior.sample(N=x_input.shape[0], M_prevalence_covariates=prevalence_covariates).to(self.device)
+            theta_prior = self.prior.sample(N=x_input.shape[0], M_prevalence_covariates=prevalence_covariates, epoch=epoch).to(self.device)
             mmd_loss = compute_mmd_loss(theta_q, theta_prior, device=self.device, t=0.1)      
 
             if self.w_prior is None:
