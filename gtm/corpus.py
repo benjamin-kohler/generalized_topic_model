@@ -17,9 +17,9 @@ class GTMCorpus(Dataset):
     """
 
     def __init__(self, df, prevalence=None, content=None, labels=None, embeddings_type=None,
-                 count_words=True, normalize_doc_length=False, vectorizer=None,
+                 count_words=True, normalize_doc_length=False, vectorizer=None, vectorizer_args={},
                  sbert_model_to_load=None, batch_size=200, max_seq_length=100000, 
-                 vector_size=300, window=10, min_count=1, workers=4, epochs=10, seed=42):
+                 doc2vec_args={}):
         """
         Initialize GTMCorpus.
 
@@ -31,16 +31,11 @@ class GTMCorpus(Dataset):
             embeddings_type : (optional) string, type of embeddings to use. Can be 'Doc2Vec' or 'SentenceTranformer'
             count_words : boolean, whether to produce a document-term matrix or not
             normalize_doc_length : boolean, whether to normalize the document-term matrix by document length (to accomodate for varying document lengths)
+            vectorizer_args: dict, arguments for the CountVectorizer object
             vectorizer : sklearn CountVectorizer object, if None, a new one will be created
             sbert_model_to_load : string, name of the SentenceTranformer model to load
             batch_size : int, batch size for SentenceTranformer embeddings
             max_seq_length : int, maximum sequence length for SentenceTranformer embeddings
-            vector_size : int, dimension of the Doc2Vec model
-            window : int, window size for the Doc2Vec training
-            min_count : int, minimum count of tokens for the Doc2Vec training
-            workers : int, number of workers for the Doc2Vec training
-            epochs : int, number of epochs for the Doc2Vec training
-            seed : int, random seed for the Doc2Vec training (ensures reproducibility when combined with a python hash seed and workers=1)
         """
 
         # Basic params and formulas
@@ -49,23 +44,19 @@ class GTMCorpus(Dataset):
         self.labels = labels
         self.embeddings_type = embeddings_type  
         self.count_words = count_words
+        self.count_vectorizer_args = vectorizer_args
         self.normalize_doc_length = normalize_doc_length
         self.vectorizer = vectorizer
         self.sbert_model_to_load = sbert_model_to_load
         self.batch_size = batch_size
         self.max_seq_length = max_seq_length
-        self.vector_size = vector_size
-        self.window = window
-        self.min_count = min_count
-        self.workers = workers
-        self.epochs = epochs
-        self.seed = seed
+        self.doc2vec_args = doc2vec_args
         self.df = df
 
         # Compute bag of words matrix
         if self.count_words:
             if vectorizer is None:
-                self.vectorizer = CountVectorizer()
+                self.vectorizer = CountVectorizer(**vectorizer_args)
                 self.M_bow = self.vectorizer.fit_transform(df['doc_clean'])
             else:
                 self.vectorizer = vectorizer
@@ -87,7 +78,7 @@ class GTMCorpus(Dataset):
         if embeddings_type == 'Doc2Vec':
             clean_docs = [doc.split() for doc in df['doc_clean']]
             tagged_documents = [TaggedDocument(doc, [i]) for i, doc in enumerate(clean_docs)]
-            self.Doc2Vec_model = Doc2Vec(tagged_documents, vector_size=vector_size, window=window, min_count=min_count, workers=workers, epochs=epochs, seed=seed)
+            self.Doc2Vec_model = Doc2Vec(tagged_documents, **doc2vec_args)
             self.M_embeddings = np.array([self.Doc2Vec_model.infer_vector(doc) for doc in clean_docs])
             self.V_embeddings = np.array([self.Doc2Vec_model.infer_vector([token]) for token in self.vocab])
 
