@@ -9,7 +9,6 @@ from torch.distributions.dirichlet import Dirichlet
 import torch.nn.functional as F
 from utils import compute_dirichlet_likelihood
 
-
 class Prior:
     """
     Base template class for doc-topic priors.
@@ -73,7 +72,7 @@ class LogisticNormalPrior(Prior):
 
         self.lambda_ = self.lambda_ - self.lambda_[:,0][:,None]
 
-    def sample(self, N, M_prevalence_covariates):
+    def sample(self, N, M_prevalence_covariates, epoch=None):
         """
         Sample from the prior.
         """

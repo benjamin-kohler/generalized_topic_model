@@ -228,3 +228,9 @@ def compute_dirichlet_likelihood(alphas, posterior_theta):
     transformed_thetas = 1/N * (posterior_theta*(N-1) + 1/n_topics)   
     LL = alphas.sum(1).lgamma() - alphas.lgamma().sum(1) + ((alphas-1)*torch.log(transformed_thetas)).sum(1)
     return LL.sum()
+
+def top_k_indices_column(col, k):
+    """
+    Returns the indices of the top k largest values for each column in a NumPy array.
+    """
+    return np.argsort(col)[-k:]

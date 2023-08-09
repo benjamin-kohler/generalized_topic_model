@@ -4,17 +4,19 @@
 import time
 import numpy as np
 import pandas as pd
+import statsmodels.api as sm
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from torch.utils.data import DataLoader
+from wordcloud import WordCloud
+import matplotlib.pyplot as plt
 from autoencoders import AutoEncoderMLP, AutoEncoderSAGE
 from predictors import Predictor
 from priors import DirichletPrior, LogisticNormalPrior
-from utils import compute_mmd_loss
+from utils import compute_mmd_loss, top_k_indices_column
 
 # TO-DO:
-# multilingual tests
 # integrate with OCTIS
 
 class GTM:
@@ -152,6 +154,7 @@ class GTM:
 
         if train_data.content is not None:
             content_covariate_size = train_data.M_content_covariates.shape[1]
+            self.content_colnames = train_data.content_colnames
         else:
             content_covariate_size = 0
 
@@ -292,7 +295,7 @@ class GTM:
                     }
                 }
                 torch.save(checkpoint,save_name)
-                print('\n'.join([str(lst) for lst in self.get_topic_word_distribution()])) 
+                print('\n'.join(["{}: {}".format(k,str(v['words'])) for k,v in self.get_topic_words().items()])) 
                 print('\n')  
 
             if self.update_prior:
@@ -401,7 +404,7 @@ class GTM:
         with torch.no_grad():
             data_loader = DataLoader(dataset,batch_size=self.batch_size,shuffle=False,num_workers=4)
             final_thetas = []
-            for iter,data in enumerate(data_loader):
+            for data in data_loader:
                 for key, value in data.items():
                     data[key] = value.to(self.device) 
                 bows = data.get("M_bow", None)
@@ -414,20 +417,20 @@ class GTM:
                     x_input = bows
                 elif self.encoder_input == 'embeddings':
                     x_input = embeddings
-                x_recon, thetas = self.AutoEncoder(x_input, prevalence_covariates, content_covariates, target_labels)
+                _, thetas = self.AutoEncoder(x_input, prevalence_covariates, content_covariates, target_labels)
                 thetas = thetas.cpu().numpy()
                 final_thetas.append(thetas)
             
         return np.concatenate(final_thetas, axis=0)
 
-    def get_topic_word_distribution(self, formula=None, topic=None, topK=8):
+    def get_topic_words(self, content_covariates=None, topK=5):
         """
-        Get the word distribution of each topic, potentially influenced by content covariates.
+        Get the top words per topic, potentially influenced by content covariates.
         """
         self.AutoEncoder.eval()
         with torch.no_grad():
             if self.decoder_type == 'mlp':
-                topic_words = []
+                topic_words = {}
                 idxes = torch.eye(self.n_topics+self.content_covariate_size).to(self.device)
                 word_dist = self.AutoEncoder.decode(idxes)
                 word_dist = F.softmax(word_dist, dim=1)
@@ -435,36 +438,148 @@ class GTM:
                 vals = vals.cpu().tolist()
                 indices = indices.cpu().tolist()
                 for topic_id in range(self.n_topics+self.content_covariate_size):
-                    topic_words.append([self.id2token[idx] for idx in indices[topic_id]])
+                    if topic_id < self.n_topics:
+                        topic_words['Topic_{}'.format(topic_id)] = {
+                            'words': [self.id2token[idx] for idx in indices[topic_id]],
+                            'values': vals[topic_id]
+                        }
+                    else:
+                        i = topic_id - self.n_topics
+                        topic_words[self.content_colnames[i]] = {
+                            'words': [self.id2token[idx] for idx in indices[topic_id]],
+                            'values': vals[topic_id]
+                        }
             elif self.decoder_type == 'sage':
                 topic_words = []
                 word_dist = F.softmax(self.AutoEncoder.beta.weight.T, dim=1)
                 vals, indices = torch.topk(word_dist, topK, dim=1)
                 vals = vals.cpu().tolist()
                 indices = indices.cpu().tolist()
-                for i in range(self.n_topics):
-                    topic_words.append([self.id2token[idx] for idx in indices[i]])   
-        if topic is not None:
-            topic_words = topic_words[topic]    
+                for topic_id in range(self.n_topics):
+                    topic_words['Topic_{}'.format(topic_id)] = {
+                            'words': [self.id2token[idx] for idx in indices[topic_id]],
+                            'values': vals[topic_id]
+                        }  
+                vals, indices = torch.topk(self.AutoEncoder.beta.bias, k=topK, dim=0).indices.cpu().numpy().flatten()  
+                topic_words['Common_words:'] = {
+                            'words': [self.id2token[idx] for idx in indices[topic_id]],
+                            'values': vals[topic_id]
+                        }  
+        
         return topic_words
 
-    def get_top_docs(self, dataset, topic, topK=1):
+    def get_topic_word_distribution(self):
         """
-        Get the most representative documents for a given topic.
+        Get the topic-word distribution of each baseline topic.
         """
-        pass
+        self.AutoEncoder.eval()
+        with torch.no_grad():
+            if self.decoder_type == 'mlp':
+                idxes = torch.eye(self.n_topics+self.content_covariate_size).to(self.device)
+                topic_word_distribution = self.AutoEncoder.decode(idxes)
+                topic_word_distribution = F.softmax(topic_word_distribution, dim=1)
+            elif self.decoder_type == 'sage':
+                topic_word_distribution = []
+                topic_word_distribution = F.softmax(self.AutoEncoder.beta.weight.T, dim=1)  
+        return topic_word_distribution.cpu().detach().numpy()[0:self.n_topics,:]
 
-    def estimate_effect(self, formula, topic):
+    def get_top_docs(self, dataset, topic_id=None, return_df=False, topK=1):
         """
-        GLM estimates and associated standard errors of the doc-topic prior for a given formula/specification.
+        Get the most representative documents per topic.
         """
-        pass
+        doc_topic_distribution = self.get_doc_topic_distribution(dataset)
+        top_k_indices_df = pd.DataFrame({f'Topic_{col}': top_k_indices_column(doc_topic_distribution[:, col], topK) for col in range(doc_topic_distribution.shape[1])})
+        if return_df is False:
+            if topic_id is None:
+                for topic_id in range(self.n_topics):
+                    for i in top_k_indices_df['Topic_{}'.format(topic_id)]:
+                        print("Topic: {} | Document index: {} | Topic share: {}".format(topic_id, i, doc_topic_distribution[i,topic_id]))
+                        print(dataset.df['doc'].iloc[i])
+                        print('\n')
+            else:
+                for i in top_k_indices_df['Topic_{}'.format(topic_id)]:
+                    print("Topic: {} | Document index: {} | Topic share: {}".format(topic_id, i, doc_topic_distribution[i,topic_id]))
+                    print(dataset.df['doc'].iloc[i])
+                    print('\n')
+        else:
+            l = []
+            for topic_id in range(self.n_topics):
+                for i in top_k_indices_df['Topic_{}'.format(topic_id)]:
+                    d = {}
+                    d["topic_id"] = topic_id
+                    d["doc_id"] = i 
+                    d["topic_share"] = doc_topic_distribution[i,topic_id]
+                    d['doc'] = dataset.df['doc'].iloc[i]
+                    l.append(d)       
+            df = pd.DataFrame.from_records(l)
+            if topic_id is not None: 
+                df = df[df['topic_id'] == topic_id]    
+                df = df.reset_index(drop=True)      
+            return df
 
-    def plot_wordcloud(self, topic, formula = None, topK=50):
+    def plot_wordcloud(self, topic_id, content_covariates=None, topK=100, output_path=None, wordcloud_args={}):
         """
-        Returns a wordcloud representation of a given topic.
+        Returns a wordcloud representation per topic.
         """
-        pass
+        topic_word_distribution = self.get_topic_words(content_covariates, topK)
+        temp = topic_word_distribution['Topic_{}'.format(topic_id)]
+        d = {}
+        for i,w in enumerate(temp['words']):
+            d[w] = temp['values'][i]
+        wordcloud = WordCloud(**wordcloud_args).generate_from_frequencies(d)
+        plt.imshow(wordcloud, interpolation='bilinear')
+        plt.axis("off")
+        if output_path is not None:
+            plt.savefig(output_path)
+
+    def estimate_effect(self, dataset, n_samples=20, topic_ids=None):
+        """
+        GLM estimates and associated standard errors of the doc-topic prior conditional on the prevalence covariates.
+
+        Uncertainty is computed using the method of composition.
+        Technically, this means we draw a set of topic proportions from the variational posterior, 
+        run a regression topic_proportion ~ covariates, then repeat for n_samples.  
+        Quantities of interest are the mean and the standard deviation of regression coefficients across samples.
+
+        /!\ May take quite some time to run. /!\
+
+        References:
+        - Roberts, M. E., Stewart, B. M., & Airoldi, E. M. (2016). A model of text for experimentation in the social sciences. Journal of the American Statistical Association, 111(515), 988-1003.
+        """
+
+        X = dataset.M_prevalence_covariates
+
+        if topic_ids is None:
+            iterator = range(self.n_topics)
+        else:
+            iterator = topic_ids
+
+        dict_of_params = {"Topic_{}".format(k):[] for k in range(self.n_topics)}
+        for i in range(n_samples):
+            Y = self.prior.sample(X.shape[0], X).cpu().numpy()
+            for k in iterator:
+                model = sm.OLS(Y[:,k],X)
+                results = model.fit()
+                dict_of_params["Topic_{}".format(k)].append(np.array([results.params]))
+
+        records_for_df = []
+        for k in iterator:
+            d = {}
+            d["topic"] = k
+            a = np.concatenate(dict_of_params["Topic_{}".format(k)])
+            mean = np.mean(a, axis=0)
+            sd = np.std(a, axis=0)
+            for i,cov in enumerate(dataset.prevalence_colnames):
+                d = {}
+                d["topic"] = k
+                d['covariate'] = cov
+                d['mean'] = mean[i]
+                d['sd'] = sd[i]
+                records_for_df.append(d)
+
+        df = pd.DataFrame.from_records(records_for_df)
+
+        return df
 
     def get_topic_correlations(self):
         """
@@ -489,7 +604,7 @@ class GTM:
         """
         term_frequency = np.ravel(dataset.M_bow.sum(axis=0))
         doc_lengths = np.ravel(dataset.M_bow.sum(axis=1))
-        vocab = self.idx2token
+        vocab = self.id2token
         term_topic = self.get_topic_word_distribution()
         doc_topic_distribution = self.get_doc_topic_distribution(
             dataset
