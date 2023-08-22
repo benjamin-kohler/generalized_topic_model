@@ -80,6 +80,8 @@ class LogisticNormalPrior(Prior):
             z_true = np.random.randn(N, self.n_topics)
             z_true = torch.softmax(torch.from_numpy(z_true), dim=1).float()
         else:
+            if torch.is_tensor(M_prevalence_covariates) == False:
+                M_prevalence_covariates = torch.from_numpy(M_prevalence_covariates).to(self.device)
             means = torch.matmul(M_prevalence_covariates, self.lambda_)
             for i in range(means.shape[0]):
                 if i == 0:
@@ -193,6 +195,8 @@ class DirichletPrior(Prior):
             z_true = torch.from_numpy(z_true).float()
         else:
             with torch.no_grad():
+                if torch.is_tensor(M_prevalence_covariates) == False:
+                    M_prevalence_covariates = torch.from_numpy(M_prevalence_covariates).to(self.device)
                 linear_preds = self.linear_model(M_prevalence_covariates)
                 alphas = torch.exp(linear_preds)
                 for i in range(alphas.shape[0]):

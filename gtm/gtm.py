@@ -6,9 +6,9 @@ import numpy as np
 import pandas as pd
 import statsmodels.api as sm
 import torch
-import torch.nn as nn
 import torch.nn.functional as F
 from torch.utils.data import DataLoader
+from tqdm import tqdm
 from wordcloud import WordCloud
 import matplotlib.pyplot as plt
 from autoencoders import AutoEncoderMLP, AutoEncoderSAGE
@@ -532,7 +532,7 @@ class GTM:
         if output_path is not None:
             plt.savefig(output_path)
 
-    def estimate_effect(self, dataset, n_samples=20, topic_ids=None):
+    def estimate_effect(self, dataset, n_samples=20, topic_ids=None, progress_bar=True):
         """
         GLM estimates and associated standard errors of the doc-topic prior conditional on the prevalence covariates.
 
@@ -554,8 +554,13 @@ class GTM:
         else:
             iterator = topic_ids
 
+        if progress_bar:
+            samples_iterator = tqdm(range(n_samples))
+        else:
+            samples_iterator = range(n_samples)
+
         dict_of_params = {"Topic_{}".format(k):[] for k in range(self.n_topics)}
-        for i in range(n_samples):
+        for i in samples_iterator:
             Y = self.prior.sample(X.shape[0], X).cpu().numpy()
             for k in iterator:
                 model = sm.OLS(Y[:,k],X)

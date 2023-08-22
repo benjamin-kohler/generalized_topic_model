@@ -90,7 +90,7 @@ class GTMCorpus(Dataset):
         if prevalence is not None:
             self.prevalence_colnames, self.M_prevalence_covariates = self._transform_df(prevalence)
         else:
-            self.M_prevalence_covariates = np.zeros((len(df['doc']),1), dtype=np.float32)
+            self.M_prevalence_covariates = np.zeros((len(df.index),1), dtype=np.float32)
 
         # Extract content covariates matrix
         if content is not None:
