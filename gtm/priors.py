@@ -186,7 +186,7 @@ class DirichletPrior(Prior):
                 self.lambda_ = self.lambda_ - self.lambda_[:,0][:,None]
                 self.lambda_ = self.lambda_.cpu().numpy()
     
-    def sample(self, N, M_prevalence_covariates, epoch=0):
+    def sample(self, N, M_prevalence_covariates, epoch=10):
         """
         Sample from the prior.
         """
