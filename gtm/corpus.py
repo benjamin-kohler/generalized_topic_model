@@ -16,7 +16,7 @@ class GTMCorpus(Dataset):
     Corpus for the GTM model.
     """
 
-    def __init__(self, df, prevalence=None, content=None, labels=None, embeddings_type=None,
+    def __init__(self, df, prevalence=None, content=None, prediction=None, labels=None, embeddings_type=None,
                  count_words=True, normalize_doc_length=False, vectorizer=None, vectorizer_args={},
                  sbert_model_to_load=None, batch_size=200, max_seq_length=100000, 
                  doc2vec_args={}):
@@ -27,7 +27,8 @@ class GTMCorpus(Dataset):
             df : pandas DataFrame. Must contain a column 'doc' with the text of each document. If count_words=True, it must also contain 'doc_clean' with the cleaned text of each document.
             prevalence : string, formula for prevalence covariates (of the form "~ cov1 + cov2 + ..."), but allows for transformations of e.g., "~ g(cov1) + h(cov2) + ...)". Use "C(your_categorical_variable)" to indicate a categorical variable. See the Patsy package for more details.
             content : string, formula for content covariates (of the form "~ cov1 + cov2 + ..."). Use "C(your_categorical_variable)" to indicate a categorical variable. See the Patsy package for more details.
-            labels : string, formula for labels (of the form "~ label1 + label2 + ...")
+            prediction : string, formula for covariates used as inputs for the prediction task (also of the form "~ cov1 + cov2 + ..."). See the Patsy package for more details.
+            labels : string, formula for labels used as outcomes for the prediction task (of the form "~ label1 + label2 + ...")
             embeddings_type : (optional) string, type of embeddings to use. Can be 'Doc2Vec' or 'SentenceTranformer'
             count_words : boolean, whether to produce a document-term matrix or not
             normalize_doc_length : boolean, whether to normalize the document-term matrix by document length (to accomodate for varying document lengths)
@@ -41,6 +42,7 @@ class GTMCorpus(Dataset):
         # Basic params and formulas
         self.prevalence = prevalence
         self.content = content
+        self.prediction = prediction
         self.labels = labels
         self.embeddings_type = embeddings_type  
         self.count_words = count_words
@@ -98,6 +100,12 @@ class GTMCorpus(Dataset):
         else:
             self.M_content_covariates = None
 
+        # Extract prediction covariates matrix
+        if prediction is not None:
+            self.prediction_colnames, self.M_prediction = self._transform_df(prediction)
+        else:
+            self.M_prediction = None
+
         # Extract labels matrix
         if labels is not None:
             self.labels_colnames, self.M_labels = self._transform_df(labels)
@@ -134,13 +142,16 @@ class GTMCorpus(Dataset):
         if self.M_embeddings is not None:
             d['M_embeddings'] = self.M_embeddings[i]
 
-        if self.labels is not None:
-            d['M_labels'] = self.M_labels[i]
+        if self.prevalence is not None:
+            d['M_prevalence_covariates'] = self.M_prevalence_covariates[i]
 
         if self.content is not None:
             d['M_content_covariates'] = self.M_content_covariates[i]
 
-        if self.prevalence is not None:
-            d['M_prevalence_covariates'] = self.M_prevalence_covariates[i]
+        if self.prediction is not None:
+            d['M_prediction'] = self.M_prediction[i]
+
+        if self.labels is not None:
+            d['M_labels'] = self.M_labels[i]
 
         return d

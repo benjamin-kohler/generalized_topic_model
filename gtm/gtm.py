@@ -158,6 +158,12 @@ class GTM:
         else:
             content_covariate_size = 0
 
+        if train_data.prediction is not None:
+            prediction_covariate_size = train_data.M_prediction.shape[1]
+            self.prediction_colnames = train_data.prediction_colnames
+        else:
+            prediction_covariate_size = 0
+
         if train_data.labels is not None:
             labels_size = train_data.M_labels.shape[1]
             if predictor_type == 'classifier':
@@ -217,7 +223,7 @@ class GTM:
             self.prior = LogisticNormalPrior(prevalence_covariate_size, n_topics, prevalence_covariates_regularization, device=self.device)
 
         if labels_size != 0:
-            predictor_dims = [n_topics]
+            predictor_dims = [n_topics+prediction_covariate_size]
             predictor_dims.extend(predictor_hidden_layers)
             predictor_dims.extend([n_labels])
             self.predictor = Predictor(
@@ -335,6 +341,7 @@ class GTM:
             embeddings = data.get("M_embeddings", None)
             prevalence_covariates = data.get("M_prevalence_covariates", None)
             content_covariates = data.get("M_content_covariates", None)
+            prediction_covariates = data.get("M_prediction", None)
             target_labels = data.get("M_labels", None)
             if self.encoder_input == 'bow':
                 x_input = bows
@@ -365,9 +372,7 @@ class GTM:
 
             # Predict labels and compute prediction loss
             if target_labels is not None:
-                predictions = self.predictor(theta_q)
-                #y_pred_probs = torch.softmax(predictions, dim=1) 
-                #print(y_pred_probs)
+                predictions = self.predictor(theta_q, prediction_covariates)
                 if self.predictor_type == 'classifier':
                     target_labels = target_labels.squeeze().to(torch.int64)
                 if self.predictor_type == 'classifier':
@@ -401,7 +406,7 @@ class GTM:
         else:
             print(f'\nEpoch {(epoch+1):>3d}\tMean Training Loss:{sum(epochloss_lst)/len(epochloss_lst):<.7f}\n')
 
-    def get_doc_topic_distribution(self, dataset, to_simplex=True):
+    def get_doc_topic_distribution(self, dataset, to_simplex=True, num_workers=4, to_numpy=True):
         """
         Get the topic distribution of each document in the corpus.
 
@@ -410,7 +415,7 @@ class GTM:
             to_simplex: whether to map the topic distribution to the simplex. If False, the topic distribution is returned in the logit space.
         """
         with torch.no_grad():
-            data_loader = DataLoader(dataset,batch_size=self.batch_size,shuffle=False,num_workers=4)
+            data_loader = DataLoader(dataset,batch_size=self.batch_size,shuffle=False,num_workers=num_workers)
             final_thetas = []
             for data in data_loader:
                 for key, value in data.items():
@@ -426,10 +431,49 @@ class GTM:
                 elif self.encoder_input == 'embeddings':
                     x_input = embeddings
                 _, thetas = self.AutoEncoder(x_input, prevalence_covariates, content_covariates, target_labels, to_simplex)
-                thetas = thetas.cpu().numpy()
-                final_thetas.append(thetas)
-            
-        return np.concatenate(final_thetas, axis=0)
+                final_thetas.append(thetas)      
+            if to_numpy:
+                final_thetas = [tensor.cpu().numpy() for tensor in final_thetas]
+                final_thetas = np.concatenate(final_thetas, axis=0)
+            else:
+                final_thetas = torch.cat(final_thetas, dim=0)
+
+        return final_thetas
+
+    def get_predictions(self, dataset, to_simplex=True, num_workers=4, to_numpy=True):
+        """
+        Predict the labels of the documents in the corpus based on topic proportions.
+        """
+
+        with torch.no_grad():
+            data_loader = DataLoader(dataset,batch_size=self.batch_size,shuffle=False,num_workers=num_workers)
+            final_predictions = []
+            for data in data_loader:
+                for key, value in data.items():
+                    data[key] = value.to(self.device) 
+                bows = data.get("M_bow", None)
+                bows = bows.reshape(bows.shape[0], -1)   
+                embeddings = data.get("M_embeddings", None)
+                prevalence_covariates = data.get("M_prevalence_covariates", None)
+                content_covariates = data.get("M_content_covariates", None)
+                prediction_covariates = data.get("M_prediction", None)
+                target_labels = data.get("M_labels", None)
+                if self.encoder_input == 'bow':
+                    x_input = bows
+                elif self.encoder_input == 'embeddings':
+                    x_input = embeddings
+                _, thetas = self.AutoEncoder(x_input, prevalence_covariates, content_covariates, target_labels, to_simplex)
+                predictions = self.predictor(thetas, prediction_covariates)
+                if self.predictor_type == 'classifier':
+                    predictions = torch.softmax(predictions, dim=1)   
+                final_predictions.append(predictions)      
+            if to_numpy:
+                final_predictions = [tensor.cpu().numpy() for tensor in final_predictions]
+                final_predictions = np.concatenate(final_predictions, axis=0)
+            else:
+                final_predictions = torch.cat(final_predictions, dim=0)
+
+        return final_predictions
 
     def get_topic_words(self, content_covariates=None, topK=5):
         """

@@ -42,11 +42,14 @@ class Predictor(nn.Module):
             for i in range(len(predictor_dims)-1)
         })
 
-    def forward(self, x):
+    def forward(self, x, M_prediction):
         """
         Forward pass.
         """
-        hid = x
+        if M_prediction is not None:
+            hid = torch.cat((x, M_prediction), dim=1)
+        else:
+            hid = x
         for i, (_,layer) in enumerate(self.neural_net.items()):
             hid = self.dropout(layer(hid))
             if i < len(self.neural_net)-1 and self.predictor_non_linear_activation is not None:
