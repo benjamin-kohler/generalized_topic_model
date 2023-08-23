@@ -301,7 +301,7 @@ class GTM:
             if self.update_prior:
                 if self.doc_topic_prior == 'dirichlet':
                     posterior_theta = self.get_doc_topic_distribution(train_data)
-                    self.prior.update_parameters(posterior_theta)
+                    self.prior.update_parameters(posterior_theta, train_data.M_prevalence_covariates)
                 else:
                     posterior_theta = self.get_doc_topic_distribution(train_data, to_simplex=False)
                     self.prior.update_parameters(posterior_theta, train_data.M_prevalence_covariates)
@@ -525,7 +525,7 @@ class GTM:
                 df = df.reset_index(drop=True)      
             return df
 
-    def plot_wordcloud(self, topic_id, content_covariates=None, topK=100, output_path=None, wordcloud_args={}):
+    def plot_wordcloud(self, topic_id, content_covariates=None, topK=100, output_path=None, wordcloud_args={'background_color':"white"}):
         """
         Returns a wordcloud representation per topic.
         """
