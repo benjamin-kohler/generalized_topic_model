@@ -54,6 +54,8 @@ class GTM:
             dropout=0.2,
             print_every=10,
             log_every=5,
+            patience=5,
+            delta=0,
             w_prior=None,
             w_pred_loss=1,
             ckpt=None,
@@ -91,6 +93,8 @@ class GTM:
             dropout: dropout rate for training.
             print_every: number of batches between each print.
             log_every: number of epochs between each checkpoint.
+            patience: number of epochs to wait before stopping the training if the validation or training loss does not improve.
+            delta: threshold to stop the training if the validation or training loss does not improve.
             w_prior: parameter to control the tightness of the encoder output with the document-topic prior. If set to None, w_prior is chosen automatically.
             w_pred_loss: parameter to control the weight given to the prediction task in the likelihood. Default is 1.
             ckpt: checkpoint to load the model from.
@@ -130,6 +134,8 @@ class GTM:
         self.dropout = dropout
         self.print_every = print_every
         self.log_every = log_every
+        self.patience = patience
+        self.delta = delta
         self.w_prior = w_prior
         self.w_pred_loss = w_pred_loss  
 
@@ -272,35 +278,21 @@ class GTM:
         else:
             start_epoch = 0
 
+        counter = 0
+        best_loss = np.Inf
+        best_epoch = -1
+        self.save_model('../ckpt/best_model.ckpt', optimizer, epoch=-1)
+
         for epoch in range(start_epoch, num_epochs):
-            self.epoch(train_data_loader,optimizer,epoch,print_every,w_prior,w_pred_loss,l1_beta,l1_beta_c,l1_beta_ci,validation=False)
+            training_loss = self.epoch(train_data_loader,optimizer,epoch,print_every,w_prior,w_pred_loss,l1_beta,l1_beta_c,l1_beta_ci,validation=False)
 
             if test_data is not None:
-                self.epoch(test_data_loader,optimizer,epoch,print_every,w_prior,w_pred_loss,l1_beta,l1_beta_c,l1_beta_ci,validation=True)
-            
+                validation_loss = self.epoch(test_data_loader,optimizer,epoch,print_every,w_prior,w_pred_loss,l1_beta,l1_beta_c,l1_beta_ci,validation=True)
+
             if (epoch+1) % log_every == 0:
                 save_name = f'../ckpt/GTM_K{self.n_topics}_{self.doc_topic_prior}_{self.decoder_type}_{self.predictor_type}_{time.strftime("%Y-%m-%d-%H-%M", time.localtime())}_{epoch+1}.ckpt'
-                
-                autoencoder_state_dict = self.AutoEncoder.state_dict()
-                if self.labels_size != 0:
-                    predictor_state_dict = self.predictor.state_dict()
-                else:
-                    predictor_state_dict = None
+                self.save_model(save_name, optimizer, epoch)
 
-                checkpoint = {
-                    "Prior": self.prior,
-                    "AutoEncoder": autoencoder_state_dict,
-                    "Predictor": predictor_state_dict,
-                    "optimizer": optimizer.state_dict(),
-                    "epoch": epoch,
-                    "param": {
-                        "input_dim": self.input_size,
-                        "n_topics": self.n_topics,
-                        "doc_topic_prior": self.doc_topic_prior,
-                        "dropout": self.dropout
-                    }
-                }
-                torch.save(checkpoint,save_name)
                 print('\n'.join(["{}: {}".format(k,str(v['words'])) for k,v in self.get_topic_words().items()])) 
                 print('\n')  
 
@@ -314,6 +306,30 @@ class GTM:
 
             if self.decoder_type == 'sage':
                 l1_beta, l1_beta_c, l1_beta_ci = self.AutoEncoder.update_jeffreys_priors(n_train)
+
+            # Stopping rule for the optimization routine
+            if test_data is not None:
+                if validation_loss + self.delta < best_loss:
+                    best_loss = validation_loss
+                    best_epoch = epoch
+                    self.save_model('../ckpt/best_model.ckpt', optimizer, epoch)
+                    counter = 0
+                else:
+                    counter += 1
+            else:
+                if training_loss + self.delta < best_loss:
+                    best_loss = training_loss
+                    best_epoch = epoch
+                    self.save_model('../ckpt/best_model.ckpt', optimizer, epoch)
+                    counter = 0
+                else:
+                    counter += 1
+            
+            if counter >= self.patience:
+                print('Early stopping at Epoch {}. Reverting to Epoch {}'.format(epoch+1, best_epoch+1))
+                ckpt = torch.load('../ckpt/best_model.ckpt')
+                self.load_model(ckpt)
+                break
 
     def epoch(self, data_loader, optimizer, epoch, print_every, w_prior, w_pred_loss, l1_beta,l1_beta_c,l1_beta_ci,validation=False):
         """
@@ -393,18 +409,20 @@ class GTM:
                 loss.backward()
                 optimizer.step()
 
-            epochloss_lst.append(loss.item()/len(x_input))
+            epochloss_lst.append(loss.item())
 
             if (iter+1) % print_every == 0:
                 if validation:
-                    print(f'Epoch {(epoch+1):>3d}\tIter {(iter+1):>4d}\tValidation Loss:{loss.item()/len(x_input):<.7f}\nRec Loss:{reconstruction_loss.item()/len(x_input):<.7f}\nMMD Loss:{mmd_loss.item()*w_prior/len(x_input):<.7f}\nSparsity Loss:{decoder_sparsity_loss/len(x_input):<.7f}\nPred Loss:{prediction_loss*w_pred_loss/len(x_input):<.7f}\n')
+                    print(f'Epoch {(epoch+1):>3d}\tIter {(iter+1):>4d}\tValidation Loss:{loss.item():<.7f}\nMean Rec Loss:{reconstruction_loss.item():<.7f}\nMMD Loss:{mmd_loss.item()*w_prior:<.7f}\nSparsity Loss:{decoder_sparsity_loss:<.7f}\nMean Pred Loss:{prediction_loss*w_pred_loss:<.7f}\n')
                 else:
-                    print(f'Epoch {(epoch+1):>3d}\tIter {(iter+1):>4d}\tTraining Loss:{loss.item()/len(x_input):<.7f}\nRec Loss:{reconstruction_loss.item()/len(x_input):<.7f}\nMMD Loss:{mmd_loss.item()*w_prior/len(x_input):<.7f}\nSparsity Loss:{decoder_sparsity_loss/len(x_input):<.7f}\nPred Loss:{prediction_loss*w_pred_loss/len(x_input):<.7f}\n')
+                    print(f'Epoch {(epoch+1):>3d}\tIter {(iter+1):>4d}\tTraining Loss:{loss.item():<.7f}\nMean Rec Loss:{reconstruction_loss.item():<.7f}\nMMD Loss:{mmd_loss.item()*w_prior:<.7f}\nSparsity Loss:{decoder_sparsity_loss:<.7f}\nMean Pred Loss:{prediction_loss*w_pred_loss:<.7f}\n')
 
         if validation:
             print(f'\nEpoch {(epoch+1):>3d}\tMean Validation Loss:{sum(epochloss_lst)/len(epochloss_lst):<.7f}\n')
         else:
             print(f'\nEpoch {(epoch+1):>3d}\tMean Training Loss:{sum(epochloss_lst)/len(epochloss_lst):<.7f}\n')
+
+        return sum(epochloss_lst)
 
     def get_doc_topic_distribution(self, dataset, to_simplex=True, num_workers=4, to_numpy=True):
         """
@@ -676,6 +694,30 @@ class GTM:
         }
 
         return data
+
+    def save_model(self, save_name, optimizer, epoch):
+        autoencoder_state_dict = self.AutoEncoder.state_dict()
+        if self.labels_size != 0:
+            predictor_state_dict = self.predictor.state_dict()
+        else:
+            predictor_state_dict = None
+
+        optimizer_state_dict = optimizer.state_dict()
+
+        checkpoint = {
+            "Prior": self.prior,
+            "AutoEncoder": autoencoder_state_dict,
+            "Predictor": predictor_state_dict,
+            "optimizer": optimizer_state_dict,
+            "epoch": epoch,
+            "param": {
+                "input_dim": self.input_size,
+                "n_topics": self.n_topics,
+                "doc_topic_prior": self.doc_topic_prior,
+                "dropout": self.dropout
+            }
+        }
+        torch.save(checkpoint,save_name)
 
     def load_model(self, ckpt):
         """
