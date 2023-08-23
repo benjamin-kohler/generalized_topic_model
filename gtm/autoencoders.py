@@ -69,7 +69,7 @@ class AutoEncoderMLP(nn.Module):
                 hid = self.decoder_nonlin(hid)
         return hid
 
-    def forward(self, x, prevalence_covariates, content_covariates, target_labels):
+    def forward(self, x, prevalence_covariates, content_covariates, target_labels, to_simplex=True):
         """
         Call the encoder and decoder methods. 
         Returns the reconstructed input and the encoded input.
@@ -85,7 +85,10 @@ class AutoEncoderMLP(nn.Module):
         else:
             theta_x = theta    
         x_recon = self.decode(theta_x)
-        return x_recon, theta
+        if to_simplex:
+            return x_recon, theta
+        else:
+            return x_recon, z
     
 
 class AutoEncoderSAGE(nn.Module):
@@ -159,15 +162,18 @@ class AutoEncoderSAGE(nn.Module):
                 eta += self.beta_ci(covar_interactions.reshape((batch_size, self.n_topic * covariate_size)))
         return eta
     
-    def forward(self, x, prevalence_covariates, content_covariates, target_labels):
+    def forward(self, x, prevalence_covariates, content_covariates, target_labels, to_simplex=True):
         if target_labels is not None:
             x = torch.cat((x, target_labels), 1)
         if prevalence_covariates is not None:
             x = torch.cat((x, prevalence_covariates), 1)
         z = self.encode(x)
         theta = F.softmax(z, dim=1)
-        x_reconst = self.decode(theta, content_covariates)
-        return x_reconst, theta
+        x_recon = self.decode(theta, content_covariates)
+        if to_simplex:
+            return x_recon, theta
+        else:
+            return x_recon, z
 
     def sparsity_loss(self, l1_beta, l1_beta_c, l1_beta_ci, device):
 

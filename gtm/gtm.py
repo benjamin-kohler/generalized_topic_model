@@ -299,8 +299,12 @@ class GTM:
                 print('\n')  
 
             if self.update_prior:
-                posterior_theta = self.get_doc_topic_distribution(train_data)
-                self.prior.update_parameters(posterior_theta, train_data.M_prevalence_covariates)
+                if self.doc_topic_prior == 'dirichlet':
+                    posterior_theta = self.get_doc_topic_distribution(train_data)
+                    self.prior.update_parameters(posterior_theta)
+                else:
+                    posterior_theta = self.get_doc_topic_distribution(train_data, to_simplex=False)
+                    self.prior.update_parameters(posterior_theta, train_data.M_prevalence_covariates)
 
             if self.decoder_type == 'sage':
                 l1_beta, l1_beta_c, l1_beta_ci = self.AutoEncoder.update_jeffreys_priors(n_train)
@@ -397,9 +401,13 @@ class GTM:
         else:
             print(f'\nEpoch {(epoch+1):>3d}\tMean Training Loss:{sum(epochloss_lst)/len(epochloss_lst):<.7f}\n')
 
-    def get_doc_topic_distribution(self, dataset):
+    def get_doc_topic_distribution(self, dataset, to_simplex=True):
         """
         Get the topic distribution of each document in the corpus.
+
+        Args:
+            dataset: a GTMCorpus object
+            to_simplex: whether to map the topic distribution to the simplex. If False, the topic distribution is returned in the logit space.
         """
         with torch.no_grad():
             data_loader = DataLoader(dataset,batch_size=self.batch_size,shuffle=False,num_workers=4)
@@ -417,7 +425,7 @@ class GTM:
                     x_input = bows
                 elif self.encoder_input == 'embeddings':
                     x_input = embeddings
-                _, thetas = self.AutoEncoder(x_input, prevalence_covariates, content_covariates, target_labels)
+                _, thetas = self.AutoEncoder(x_input, prevalence_covariates, content_covariates, target_labels, to_simplex)
                 thetas = thetas.cpu().numpy()
                 final_thetas.append(thetas)
             
