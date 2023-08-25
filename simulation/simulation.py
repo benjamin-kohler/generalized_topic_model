@@ -59,7 +59,7 @@ class Simulator:
         input (kwargs)
             data (original_dataset_dict),
             num_topics,
-            num_silulations,
+            num_silulatio   ns,
             model_args=None,
             is_output=False,
         """

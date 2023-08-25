@@ -40,6 +40,7 @@ def matching_topic(model_type, matching_by, **kwargs):
     corres_num_topic_dict = {}
 
     model_type = "{}".format(model_type)
+
     if model_type == "lda":
         true_df_dist_name = "true_df_{}.pickle".format(dist_type)
 
@@ -96,10 +97,10 @@ def matching_topic(model_type, matching_by, **kwargs):
                         np.dot(target_col.T, true_target_col)
                         / (np.linalg.norm(target_col) * np.linalg.norm(true_target_col))
                     )
-                else:
+                else:  # dot_product
                     score_list_per_row.append(np.dot(target_col, true_target_col))
             score_list.append(score_list_per_row)
-    else:
+    else:  # top10 keywords
         # TODO check if this logic is fine
         score_list = []
         true_topic_keywords_dict, estimated_topic_keywords_dict = {}, {}
