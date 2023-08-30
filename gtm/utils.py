@@ -4,6 +4,8 @@
 from sentence_transformers import SentenceTransformer
 from tqdm import tqdm
 import numpy as np
+import pandas as pd
+import csv
 import warnings
 from typing import List, Optional
 from tqdm import tqdm
@@ -104,6 +106,8 @@ class text_processor:
         docs: List[str],
         batch_size: int = 100,
         n_process: int = -1,
+        output_path: Optional[str] = None,
+        return_docs: bool = False,
         progress_bar: bool = True
     ):
         
@@ -116,13 +120,27 @@ class text_processor:
         if progress_bar:
             spacy_docs = tqdm(spacy_docs, total=len(docs))
         
-        docs_clean = []
-        for k,doc in enumerate(spacy_docs):
-            cleaned_text = self.clean_text(doc)
-            docs_clean.append(cleaned_text)
+        if output_path is None:
+            docs_clean = []
+            for doc in spacy_docs:
+                cleaned_text = self.clean_text(doc)
+                docs_clean.append(cleaned_text)
+
+        else:
+            with open(output_path, "w", newline="") as csvfile:
+                fieldnames = ["doc_clean"]
+                writer = csv.writer(csvfile)
+                writer.writerow(fieldnames)
+                for doc in spacy_docs:
+                    cleaned_text = self.clean_text(doc)
+                    writer.writerow([cleaned_text])
+
+            if return_docs:
+                docs_clean = pd.read_csv(output_path)["doc_clean"].tolist()
+            else:
+                docs_clean = None
 
         return docs_clean
-
 
 def check_max_local_length(max_seq_length, texts):
     max_local_length = np.max([len(t.split()) for t in texts])
@@ -207,6 +225,12 @@ def compute_dirichlet_likelihood(alphas, posterior_theta):
     """
     N = alphas.shape[0]
     n_topics = alphas.shape[1]
-    transformed_thetas = 1/N * (posterior_theta*(N-1) + 1/n_topics)    
+    transformed_thetas = 1/N * (posterior_theta*(N-1) + 1/n_topics)   
     LL = alphas.sum(1).lgamma() - alphas.lgamma().sum(1) + ((alphas-1)*torch.log(transformed_thetas)).sum(1)
     return LL.sum()
+
+def top_k_indices_column(col, k):
+    """
+    Returns the indices of the top k largest values for each column in a NumPy array.
+    """
+    return np.argsort(col)[-k:]
