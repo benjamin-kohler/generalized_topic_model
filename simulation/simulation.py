@@ -28,8 +28,8 @@ class Simulator:
         self.docs = None
         self.true_df_doc_topic = None
         self.true_df_topic_word = None
-        # self.df_doc_topic_list = None
-        # self.df_topic_word_list = None
+        self.df_doc_topic_list = None
+        self.df_topic_word_list = None
 
     def generate_docs(self, **kwargs):
         """
@@ -78,3 +78,5 @@ class Simulator:
                 voc_size=self.voc_size,
                 **kwargs,
             )
+        self.df_doc_topic_list = df_doc_topic_list
+        self.df_topic_word_list = df_topic_word_list

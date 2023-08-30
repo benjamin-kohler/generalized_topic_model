@@ -21,7 +21,6 @@ def matching_topic(model_type, matching_by, **kwargs):
             {num_sim : {true_topic_idx: estimated_topic_name}}
     """
 
-    # TODO check if this assignment is fine, especially top10 keywords approach
     if matching_by in ["correlation", "cossim", "dot_product"]:
         dist_type = "doc_topic"
     elif matching_by == "keyword":
