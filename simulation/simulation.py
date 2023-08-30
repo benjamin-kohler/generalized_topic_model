@@ -78,5 +78,3 @@ class Simulator:
                 voc_size=self.voc_size,
                 **kwargs,
             )
-        # self.df_doc_topic_list = df_doc_topic_list
-        # self.df_topic_word_list = df_topic_word_list

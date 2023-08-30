@@ -6,11 +6,12 @@ import pickle
 import numpy as np
 import pandas as pd
 from corpus import GTMCorpus
-from patsy import dmatrix
 from tqdm import tqdm
 
 # First Party Library
 from gtm import GTM
+
+# from patsy import dmatrix
 
 
 def generate_docs_by_gtm(
@@ -75,7 +76,6 @@ def generate_docs_by_gtm(
             doc_args["num_content_covs"], doc_args["num_docs"]
         )
         if lambda_ is None:
-            # lambda_ = 2 * np.random.rand(doc_args["num_content_covs"], num_topics) - 1
             lambda_ = np.random.rand(doc_args["num_content_covs"], num_topics)
             lambda_ = lambda_ - lambda_[:, 0][:, None]
 
@@ -166,21 +166,6 @@ def generate_docs_by_gtm(
     df_doc_word = pd.DataFrame(doc_word_pro, index=docnames, columns=words)
     df_true_dist_list = [df_doc_topic, df_topic_word]
 
-    # docs = []
-    # for docname in tqdm(docnames):
-    #     doc = []
-    #     num_words = np.random.randint(
-    #         low=doc_args["min_words"],
-    #         high=doc_args["max_words"] + 1,
-    #     )
-    #     top_pro = df_doc_topic.loc[docname, :]
-    #     topic_list = [np.random.choice(topicnames, p=top_pro) for _ in range(num_words)]
-    #     for topic in topic_list:
-    #         word_pro = df_topic_word.loc[topic, :]
-    #         word = np.random.choice(words, p=word_pro)
-    #         doc.append(word)
-    #     docs.append(" ".join(doc))
-
     docs = []
     for docname in tqdm(docnames):
         num_words = np.random.randint(
@@ -209,9 +194,6 @@ def generate_docs_by_gtm(
             current_dir.joinpath("..", "data").mkdir()
         if not current_dir.joinpath("..", "data", "gtm").exists():
             current_dir.joinpath("..", "data", "gtm").mkdir()
-        # if decoder_estimate_interactions:
-        #     file_name = "{}_{}_int".format(doc_topic_prior, decoder_type)
-        # else:
         file_name = "{}_{}".format(doc_topic_prior, decoder_type)
 
         true_df_doc_topic_path = (
@@ -288,7 +270,6 @@ def estimate_dist_by_gtm(
     model_args=None,
     is_output=True,
 ):
-    # TODO setting the default args
     default_model_args_dict = {
         "num_epochs": 10,
         "update_prior": True,
@@ -333,11 +314,6 @@ def estimate_dist_by_gtm(
         current_dir = p.cwd()
         if not current_dir.joinpath("..", "data", "gtm").exists():
             current_dir.joinpath("..", "data", "gtm").mkdir()
-        # if model_args.get("decoder_estimate_interactions", False):
-        #     file_name = "{}_{}_int".format(
-        #         model_args["doc_topic_prior"], model_args["decoder_type"]
-        #     )
-        # else:
         file_name = "{}_{}".format(
             model_args["doc_topic_prior"], model_args["decoder_type"]
         )

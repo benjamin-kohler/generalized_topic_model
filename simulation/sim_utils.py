@@ -101,7 +101,6 @@ def matching_topic(model_type, matching_by, **kwargs):
                     score_list_per_row.append(np.dot(target_col, true_target_col))
             score_list.append(score_list_per_row)
     else:  # top10 keywords
-        # TODO check if this logic is fine
         score_list = []
         true_topic_keywords_dict, estimated_topic_keywords_dict = {}, {}
         for index in true_df.index:
