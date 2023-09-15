@@ -108,6 +108,7 @@ class text_processor:
         n_process: int = -1,
         output_path: Optional[str] = None,
         return_docs: bool = False,
+        reload_model_every=10000, # helps with memory leakage issues
         progress_bar: bool = True
     ):
         
@@ -120,12 +121,17 @@ class text_processor:
         if progress_bar:
             spacy_docs = tqdm(spacy_docs, total=len(docs))
         
+        counter = 0
+
         if output_path is None:
             docs_clean = []
             for doc in spacy_docs:
                 cleaned_text = self.clean_text(doc)
                 docs_clean.append(cleaned_text)
-
+                counter += 1
+                if counter > reload_model_every:
+                    self._nlp = spacy.load(self.spacy_model, disable = ['ner', 'parser'])
+                    counter = 0
         else:
             with open(output_path, "w", newline="") as csvfile:
                 fieldnames = ["doc_clean"]
@@ -134,7 +140,10 @@ class text_processor:
                 for doc in spacy_docs:
                     cleaned_text = self.clean_text(doc)
                     writer.writerow([cleaned_text])
-
+                    counter += 1
+                    if counter > reload_model_every:
+                        self._nlp = spacy.load(self.spacy_model, disable = ['ner', 'parser'])
+                        counter = 0
             if return_docs:
                 docs_clean = pd.read_csv(output_path)["doc_clean"].tolist()
             else:
