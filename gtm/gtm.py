@@ -404,6 +404,8 @@ class GTM:
                     posterior_theta, train_data.M_prevalence_covariates
                 )
 
+            print(self.prior.lambda_)
+
             if self.decoder_type == "sage":
                 (
                     l1_beta,
