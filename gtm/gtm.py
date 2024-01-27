@@ -1,16 +1,12 @@
 #!/usr/bin/env python
 # -*- encoding: utf-8 -*-
 
-# Standard Library
 import time
-
-# Third Party Library
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 import statsmodels.api as sm
 import torch
-import torch.nn as nn
 import torch.nn.functional as F
 from autoencoders import AutoEncoderMLP, AutoEncoderSAGE
 from predictors import Predictor
@@ -95,6 +91,8 @@ class GTM:
             dropout: dropout rate for training.
             print_every: number of batches between each print.
             log_every: number of epochs between each checkpoint.
+            patience: number of epochs to wait before stopping the training if the validation or training loss does not improve.
+            delta: threshold to stop the training if the validation or training loss does not improve.
             w_prior: parameter to control the tightness of the encoder output with the document-topic prior. If set to None, w_prior is chosen automatically.
             w_pred_loss: parameter to control the weight given to the prediction task in the likelihood. Default is 1.
             ckpt: checkpoint to load the model from.
@@ -134,6 +132,8 @@ class GTM:
         self.dropout = dropout
         self.print_every = print_every
         self.log_every = log_every
+        self.patience = patience
+        self.delta = delta
         self.w_prior = w_prior
         self.w_pred_loss = w_pred_loss
         self.seed = seed
@@ -162,6 +162,12 @@ class GTM:
             self.content_colnames = train_data.content_colnames
         else:
             content_covariate_size = 0
+
+        if train_data.prediction is not None:
+            prediction_covariate_size = train_data.M_prediction.shape[1]
+            self.prediction_colnames = train_data.prediction_colnames
+        else:
+            prediction_covariate_size = 0
 
         if train_data.labels is not None:
             labels_size = train_data.M_labels.shape[1]
@@ -234,7 +240,7 @@ class GTM:
             )
 
         if labels_size != 0:
-            predictor_dims = [n_topics]
+            predictor_dims = [n_topics+prediction_covariate_size]
             predictor_dims.extend(predictor_hidden_layers)
             predictor_dims.extend([n_labels])
             self.predictor = Predictor(
@@ -336,6 +342,11 @@ class GTM:
             start_epoch = ckpt["epoch"] + 1
         else:
             start_epoch = 0
+
+        counter = 0
+        best_loss = np.Inf
+        best_epoch = -1
+        self.save_model('../ckpt/best_model.ckpt', optimizer, epoch=-1)
 
         for epoch in range(start_epoch, num_epochs):
             self.epoch(
@@ -451,6 +462,7 @@ class GTM:
             embeddings = data.get("M_embeddings", None)
             prevalence_covariates = data.get("M_prevalence_covariates", None)
             content_covariates = data.get("M_content_covariates", None)
+            prediction_covariates = data.get("M_prediction", None)
             target_labels = data.get("M_labels", None)
             if self.encoder_input == "bow":
                 x_input = bows
@@ -536,9 +548,15 @@ class GTM:
             )
             self.mean_train_loss.append(sum(epochloss_lst) / len(epochloss_lst))
 
-    def get_doc_topic_distribution(self, dataset):
+        return sum(epochloss_lst)
+
+    def get_doc_topic_distribution(self, dataset, to_simplex=True, num_workers=4, to_numpy=True):
         """
         Get the topic distribution of each document in the corpus.
+
+        Args:
+            dataset: a GTMCorpus object
+            to_simplex: whether to map the topic distribution to the simplex. If False, the topic distribution is returned in the logit space.
         """
         with torch.no_grad():
             data_loader = DataLoader(
@@ -577,6 +595,9 @@ class GTM:
                 idxes = torch.eye(self.n_topics + self.content_covariate_size).to(
                     self.device
                 )
+            if self.decoder_type == 'mlp':
+                topic_words = {}
+                idxes = torch.eye(self.n_topics+self.content_covariate_size).to(self.device)
                 word_dist = self.AutoEncoder.decode(idxes)
                 word_dist = F.softmax(word_dist, dim=1)
                 vals, indices = torch.topk(word_dist, topK, dim=1)
@@ -605,16 +626,16 @@ class GTM:
                         "words": [self.id2token[idx] for idx in indices[topic_id]],
                         "values": vals[topic_id],
                     }
-                # vals, indices = (
-                #     torch.topk(self.AutoEncoder.beta.bias, k=topK, dim=0)
-                #     .indices.cpu()
-                #     .numpy()
-                #     .flatten()
-                # )
-                # topic_words["Common_words:"] = {
-                #     "words": [self.id2token[idx] for idx in indices[topic_id]],
-                #     "values": vals[topic_id],
-                # }
+                vals, indices = (
+                    torch.topk(self.AutoEncoder.beta.bias, k=topK, dim=0)
+                    .indices.cpu()
+                    .numpy()
+                    .flatten()
+                )
+                topic_words["Common_words:"] = {
+                    "words": [self.id2token[idx] for idx in indices[topic_id]],
+                    "values": vals[topic_id],
+                }
 
         return topic_words
 
@@ -793,6 +814,30 @@ class GTM:
         }
 
         return data
+
+    def save_model(self, save_name, optimizer, epoch):
+        autoencoder_state_dict = self.AutoEncoder.state_dict()
+        if self.labels_size != 0:
+            predictor_state_dict = self.predictor.state_dict()
+        else:
+            predictor_state_dict = None
+
+        optimizer_state_dict = optimizer.state_dict()
+
+        checkpoint = {
+            "Prior": self.prior,
+            "AutoEncoder": autoencoder_state_dict,
+            "Predictor": predictor_state_dict,
+            "optimizer": optimizer_state_dict,
+            "epoch": epoch,
+            "param": {
+                "input_dim": self.input_size,
+                "n_topics": self.n_topics,
+                "doc_topic_prior": self.doc_topic_prior,
+                "dropout": self.dropout
+            }
+        }
+        torch.save(checkpoint,save_name)
 
     def load_model(self, ckpt):
         """
