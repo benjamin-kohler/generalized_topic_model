@@ -54,12 +54,10 @@ class LogisticNormalPrior(Prior):
             self.lambda_ = torch.zeros(prevalence_covariate_size, n_topics).to(self.device)
             self.sigma = torch.diag(torch.Tensor([1.0]*self.n_topics)).to(self.device)            
     
-    def update_parameters(self, posterior_theta, M_prevalence_covariates): 
+    def update_parameters(self, posterior_mu, M_prevalence_covariates): 
         """
         M-step after each epoch.
         """
-        M_prevalence_covariates = M_prevalence_covariates
-        posterior_mu = np.log(posterior_theta + 1e-6) 
 
         reg = linear_model.Ridge(alpha=self.prevalence_covariates_regularization, fit_intercept=False)
         lambda_ = reg.fit(M_prevalence_covariates, posterior_mu).coef_
@@ -72,14 +70,15 @@ class LogisticNormalPrior(Prior):
 
         self.lambda_ = self.lambda_ - self.lambda_[:,0][:,None]
 
-    def sample(self, N, M_prevalence_covariates, epoch=None):
+    def sample(self, N, M_prevalence_covariates, to_simplex=True, epoch=None):
         """
         Sample from the prior.
         """
         if self.prevalence_covariates_size == 0:
             z_true = np.random.randn(N, self.n_topics)
-            z_true = torch.softmax(torch.from_numpy(z_true), dim=1).float()
         else:
+            if torch.is_tensor(M_prevalence_covariates) == False:
+                M_prevalence_covariates = torch.from_numpy(M_prevalence_covariates).to(self.device)
             means = torch.matmul(M_prevalence_covariates, self.lambda_)
             for i in range(means.shape[0]):
                 if i == 0:
@@ -89,10 +88,11 @@ class LogisticNormalPrior(Prior):
                     m = MultivariateNormal(means[i], self.sigma)
                     z_temp = m.sample()
                     z_true = torch.cat([z_true, z_temp.unsqueeze(0)],0)
-            z_true = torch.softmax(z_true, dim=1).float()
-        return z_true
+        if to_simplex:
+            z_true = torch.softmax(z_true, dim=1)
+        return z_true.float()
     
-    def simulate(self, M_prevalence_covariates, lambda_, sigma):
+    def simulate(self, M_prevalence_covariates, lambda_, sigma, to_simplex=False):
         """
         Simulate data to test the prior's updating rule.
         """    
@@ -105,8 +105,9 @@ class LogisticNormalPrior(Prior):
                 m = MultivariateNormal(means[i], sigma)
                 z_temp = m.sample()
                 z_sim = torch.cat([z_sim, z_temp.unsqueeze(0)],0)
-        z_sim = torch.softmax(z_sim, dim=1).float()
-        return z_sim
+        if to_simplex:
+            z_sim = torch.softmax(z_sim, dim=1)
+        return z_sim.float()
 
 
 class LinearModel(torch.nn.Module):
@@ -184,7 +185,7 @@ class DirichletPrior(Prior):
                 self.lambda_ = self.lambda_ - self.lambda_[:,0][:,None]
                 self.lambda_ = self.lambda_.cpu().numpy()
     
-    def sample(self, N, M_prevalence_covariates, epoch=0):
+    def sample(self, N, M_prevalence_covariates, epoch=10):
         """
         Sample from the prior.
         """
@@ -193,6 +194,8 @@ class DirichletPrior(Prior):
             z_true = torch.from_numpy(z_true).float()
         else:
             with torch.no_grad():
+                if torch.is_tensor(M_prevalence_covariates) == False:
+                    M_prevalence_covariates = torch.from_numpy(M_prevalence_covariates).to(self.device)
                 linear_preds = self.linear_model(M_prevalence_covariates)
                 alphas = torch.exp(linear_preds)
                 for i in range(alphas.shape[0]):
