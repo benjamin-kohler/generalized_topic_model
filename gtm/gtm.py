@@ -148,6 +148,9 @@ class GTM:
                 if torch.cuda.is_available()
                 else torch.device("cpu")
             )
+            # support macos GPU
+            if torch.backends.mps.is_available():
+                self.device = torch.device("mps")
 
         bow_size = train_data.M_bow.shape[1]
         self.bow_size = bow_size

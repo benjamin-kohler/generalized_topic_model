@@ -167,7 +167,11 @@ def bert_embeddings_from_list(
     """
     Creates SBERT Embeddings from a list
     """
-    model = SentenceTransformer(sbert_model_to_load)
+    # support macos GPU
+    device = 'cuda' if torch.cuda.is_available() else "cpu"
+    if torch.backends.mps.is_available():
+        device = 'mps'
+    model = SentenceTransformer(sbert_model_to_load, device=device)
 
     if max_seq_length is not None:
         model.max_seq_length = max_seq_length
