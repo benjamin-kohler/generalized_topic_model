@@ -13,3 +13,4 @@ statsmodels
 notebook
 umap-learn
 pyLDAvis
+plotly
