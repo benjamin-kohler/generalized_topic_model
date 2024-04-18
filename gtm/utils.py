@@ -13,7 +13,15 @@ import spacy
 from spacy.cli import download as spacy_download
 import torch
 from torch.distributions.dirichlet import Dirichlet
+import gensim
+from gensim.corpora.dictionary import Dictionary
 
+def vect2gensim(vectorizer, dtmatrix):
+    corpus_vect_gensim = gensim.matutils.Sparse2Corpus(dtmatrix, documents_columns=False)
+    dictionary = Dictionary.from_corpus(corpus_vect_gensim,
+        id2word=dict((id, word) for word, id in vectorizer.vocabulary_.items()))
+
+    return (corpus_vect_gensim, dictionary)
 
 class text_processor:
     """
@@ -177,6 +185,48 @@ def bert_embeddings_from_list(
     return np.array(model.encode(texts, show_progress_bar=True, batch_size=batch_size))
 
 
+def compute_mmd_loss(x, y, device, kernel = 'multiscale'):
+    """Emprical maximum mean discrepancy. The lower the result
+       the more evidence that distributions are the same.
+
+    Args:
+        x: first sample, distribution P
+        y: second sample, distribution Q
+        kernel: kernel type such as "multiscale" or "rbf"
+    """
+    xx, yy, zz = torch.mm(x, x.t()), torch.mm(y, y.t()), torch.mm(x, y.t())
+    rx = (xx.diag().unsqueeze(0).expand_as(xx))
+    ry = (yy.diag().unsqueeze(0).expand_as(yy))
+    
+    dxx = rx.t() + rx - 2. * xx # Used for A in (1)
+    dyy = ry.t() + ry - 2. * yy # Used for B in (1)
+    dxy = rx.t() + ry - 2. * zz # Used for C in (1)
+    
+    XX, YY, XY = (torch.zeros(xx.shape).to(device),
+                  torch.zeros(xx.shape).to(device),
+                  torch.zeros(xx.shape).to(device))
+    
+    if kernel == "multiscale":
+
+        #bandwidth_range = [0.2, 0.5, 0.7, 1, 1.3]
+        bandwidth_range = [0.1,0.2,0.3,0.4,0.5,0.6,0.7,0.8,0.9,1]
+        for a in bandwidth_range:
+            XX += a**2 * (a**2 + dxx)**-1
+            YY += a**2 * (a**2 + dyy)**-1
+            XY += a**2 * (a**2 + dxy)**-1
+            
+    if kernel == "rbf":
+
+        bandwidth_range = [10, 15, 20, 50]
+        #bandwidth_range = [10, 15, 20, 50]
+        for a in bandwidth_range:
+            XX += torch.exp(-0.5*dxx/a)
+            YY += torch.exp(-0.5*dyy/a)
+            XY += torch.exp(-0.5*dxy/a)
+
+    return torch.mean(XX + YY - 2. * XY)
+
+
 def compute_mmd_loss(x, y, device, t=0.1, kernel="diffusion"):
     """
     Computes the MMD loss with information diffusion kernel.
@@ -186,43 +236,25 @@ def compute_mmd_loss(x, y, device, t=0.1, kernel="diffusion"):
     """
     eps = 1e-6
     n, d = x.shape
-    if kernel == "tv":
-        sum_xx = torch.zeros(1).to(device)
-        for i in range(n):
-            for j in range(i + 1, n):
-                sum_xx = sum_xx + torch.norm(x[i] - x[j], p=1).to(device)
-        sum_xx = sum_xx / (n * (n - 1))
+    
+    qx = torch.sqrt(torch.clamp(x, eps, 1))
+    qy = torch.sqrt(torch.clamp(y, eps, 1))
+    xx = torch.matmul(qx, qx.t())
+    yy = torch.matmul(qy, qy.t())
+    xy = torch.matmul(qx, qy.t())
 
-        sum_yy = torch.zeros(1).to(device)
-        for i in range(y.shape[0]):
-            for j in range(i + 1, y.shape[0]):
-                sum_yy = sum_yy + torch.norm(y[i] - y[j], p=1).to(device)
-        sum_yy = sum_yy / (y.shape[0] * (y.shape[0] - 1))
+    def diffusion_kernel(a, tmpt, dim):
+        return torch.exp(-torch.acos(a).pow(2)) / tmpt
 
-        sum_xy = torch.zeros(1).to(device)
-        for i in range(n):
-            for j in range(y.shape[0]):
-                sum_xy = sum_xy + torch.norm(x[i] - y[j], p=1).to(device)
-        sum_yy = sum_yy / (n * y.shape[0])
-    else:
-        qx = torch.sqrt(torch.clamp(x, eps, 1))
-        qy = torch.sqrt(torch.clamp(y, eps, 1))
-        xx = torch.matmul(qx, qx.t())
-        yy = torch.matmul(qy, qy.t())
-        xy = torch.matmul(qx, qy.t())
+    off_diag = 1 - torch.eye(n).to(device)
+    k_xx = diffusion_kernel(torch.clamp(xx, 0, 1 - eps), t, d - 1)
+    k_yy = diffusion_kernel(torch.clamp(yy, 0, 1 - eps), t, d - 1)
+    k_xy = diffusion_kernel(torch.clamp(xy, 0, 1 - eps), t, d - 1)
+    sum_xx = (k_xx * off_diag).sum() / (n * (n - 1))
+    sum_yy = (k_yy * off_diag).sum() / (n * (n - 1))
+    sum_xy = 2 * k_xy.sum() / (n * n)
 
-        def diffusion_kernel(a, tmpt, dim):
-            return torch.exp(-torch.acos(a).pow(2)) / tmpt
-
-        off_diag = 1 - torch.eye(n).to(device)
-        k_xx = diffusion_kernel(torch.clamp(xx, 0, 1 - eps), t, d - 1)
-        k_yy = diffusion_kernel(torch.clamp(yy, 0, 1 - eps), t, d - 1)
-        k_xy = diffusion_kernel(torch.clamp(xy, 0, 1 - eps), t, d - 1)
-        sum_xx = (k_xx * off_diag).sum() / (n * (n - 1))
-        sum_yy = (k_yy * off_diag).sum() / (n * (n - 1))
-        sum_xy = 2 * k_xy.sum() / (n * n)
-
-        mmd_loss = sum_xx + sum_yy - sum_xy
+    mmd_loss = sum_xx + sum_yy - sum_xy
 
     return mmd_loss
 

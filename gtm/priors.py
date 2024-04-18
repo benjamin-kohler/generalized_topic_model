@@ -9,7 +9,7 @@ from torch.distributions.multivariate_normal import MultivariateNormal
 from torch.distributions.dirichlet import Dirichlet
 import torch.nn.functional as F
 from utils import compute_dirichlet_likelihood
-from sklearn.linear_model import MultiTaskElasticNetCV
+from sklearn.linear_model import LinearRegression,RidgeCV,MultiTaskLassoCV,MultiTaskElasticNetCV
 
 
 class Prior:
@@ -54,12 +54,14 @@ class LogisticNormalPrior(Prior):
         self,
         prevalence_covariate_size,
         n_topics,
-        prevalence_regularization_args,
+        model_type,
+        prevalence_model_args,
         device,
     ):
         self.prevalence_covariates_size = prevalence_covariate_size
         self.n_topics = n_topics
-        self.prevalence_regularization_args = prevalence_regularization_args
+        self.model_type = model_type
+        self.prevalence_model_args = prevalence_model_args
         self.device = device
         if prevalence_covariate_size != 0:
             self.lambda_ = torch.zeros(prevalence_covariate_size, n_topics).to(
@@ -67,12 +69,19 @@ class LogisticNormalPrior(Prior):
             )
             self.sigma = torch.diag(torch.Tensor([1.0] * self.n_topics)).to(self.device)
 
-    def update_parameters(self, posterior_mu, M_prevalence_covariates, **kwargs):
+    def update_parameters(self, posterior_mu, M_prevalence_covariates):
         """
         M-step after each epoch.
         """
-
-        reg = MultiTaskElasticNetCV(fit_intercept=False, **kwargs)
+        if self.model_type == "MultiTaskElasticNetCV":
+            reg = MultiTaskElasticNetCV(fit_intercept=False, **self.prevalence_model_args)
+        elif self.model_type == "MultiTaskLassoCV":
+            reg = MultiTaskLassoCV(fit_intercept=False, **self.prevalence_model_args)
+        elif self.model_type == "RidgeCV":
+            reg = RidgeCV(fit_intercept=False, **self.prevalence_model_args)
+        else:
+            reg = LinearRegression(fit_intercept=False, **self.prevalence_model_args)
+            
         reg.fit(M_prevalence_covariates, posterior_mu)
         lambda_ = reg.coef_
         self.lambda_ = torch.from_numpy(lambda_.T).to(self.device)
@@ -82,7 +91,7 @@ class LogisticNormalPrior(Prior):
             self.device
         )
         difference_in_means = posterior_mu - torch.matmul(
-            M_prevalence_covariates, self.lambda_
+            M_prevalence_covariates, self.lambda_.to(torch.float32)
         )
         self.sigma = (
             torch.matmul(difference_in_means.T, difference_in_means)
@@ -90,6 +99,7 @@ class LogisticNormalPrior(Prior):
         )
 
         self.lambda_ = self.lambda_ - self.lambda_[:, 0][:, None]
+        self.lambda_ = self.lambda_.to(torch.float32)
 
     def sample(self, N, M_prevalence_covariates, to_simplex=True, epoch=None):
         """
@@ -97,6 +107,9 @@ class LogisticNormalPrior(Prior):
         """
         if self.prevalence_covariates_size == 0:
             z_true = np.random.randn(N, self.n_topics)
+            z_true = torch.from_numpy(z_true).to(
+                    self.device
+                )
         else:
             if torch.is_tensor(M_prevalence_covariates) == False:
                 M_prevalence_covariates = torch.from_numpy(M_prevalence_covariates).to(
@@ -188,14 +201,17 @@ class DirichletPrior(Prior):
         prevalence_covariates_size,
         n_topics,
         alpha,
-        prevalence_regularization_args,
+        prevalence_model_args,
         tol,
         device,
     ):
         self.prevalence_covariates_size = prevalence_covariates_size
         self.n_topics = n_topics
         self.alpha = alpha
-        self.prevalence_regularization_args = prevalence_regularization_args
+        if prevalence_model_args is None:
+            self.prevalence_model_args = {"alphas":[0,0.1,1,10]}
+        else:
+            self.prevalence_model_args = prevalence_model_args
         self.tol = tol
         self.lambda_ = None
         self.device = device
@@ -209,7 +225,7 @@ class DirichletPrior(Prior):
         M-step after each epoch.
         """
 
-        alphas = self.prevalence_regularization_args["alphas"]
+        alphas = self.prevalence_model_args["alphas"]
 
         # Simple Conditional Means Estimation
         # (fast educated guess)

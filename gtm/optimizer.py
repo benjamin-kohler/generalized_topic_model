@@ -1,5 +1,6 @@
 from itertools import product
-from utils import topic_diversity
+from utils import topic_diversity, vect2gensim
+from gensim.models.coherencemodel import CoherenceModel
 import matplotlib.pyplot as plt
 from gtm import GTM
 import numpy as np
@@ -20,20 +21,19 @@ class GTMOptimizer:
     def __init__(
         self,
         n_topics=[20, 50, 100],
-        evaluation_metrics=["diversity"],
+        evaluation_metrics=["diversity", "c_npmi", "c_v", "c_uci", "umass"],
         n_samples=1,
         doc_topic_priors=["logistic_normal"],
         alphas=[0.1],
         encoder_inputs=["bow"],
-        encoder_hidden_layers=[[]],
+        encoder_hidden_layers=[[1024,512]],
         encoder_non_linear_activation=["relu"],
         encoder_biases=[True],
-        decoder_hidden_layers=[[]],
+        decoder_hidden_layers=[[1024,512]],
         decoder_non_linear_activation=["relu"],
         decoder_biases=[True],
         predictor_hidden_layers=[[]],
         predictor_non_linear_activation=["relu"],
-        coherence_model_args={"coherence": "u_mass"},
         gtm_model_args={
             "print_every_n_epochs": 1000000,
             "print_every_n_batches": 1000000,
@@ -78,7 +78,6 @@ class GTMOptimizer:
         self.predictor_hidden_layers = predictor_hidden_layers
         self.predictor_non_linear_activation = predictor_non_linear_activation
         self.grid = None
-        self.coherence_model_args = coherence_model_args
         self.gtm_model_args = gtm_model_args
         self.topK = topK
         self.save_folder = save_folder
@@ -86,11 +85,34 @@ class GTMOptimizer:
         if not os.path.exists(save_folder):
             os.makedirs(save_folder)
 
-    def optimize(self, train_dataset):
+        self.corpus = None
+        self.dictionary = None
+        self.texts = []
+
+    def create_gensim_objects(self, dataset):
+        """
+        Converts a GTMCorpus into Gensim Corpus, Dictionary, and Texts. Those are required to compute coherence metrics.
+        """
+        vectorizer = dataset.vectorizer
+        dtmatrix = dataset.M_bow
+        (self.corpus, self.dictionary) = vect2gensim(vectorizer, dtmatrix)
+        vocab = list(vectorizer.vocabulary_.keys())
+        docs = list(dataset.df['doc_clean'])
+        docs = [doc.split() for doc in docs]
+        for doc in docs: 
+            text = [word for word in doc if word in vocab]
+            self.texts.append(text)
+    
+    def optimize(self, train_dataset, test_dataset=None):
         """
         Optimizes the hyperparameters of the Generalized Topic Model via Grid Search.
         """
 
+        if test_dataset is not None: 
+            self.create_gensim_objects(test_dataset)
+        else:
+            self.create_gensim_objects(train_dataset)
+        
         all_results = []
 
         i = 1
@@ -139,6 +161,7 @@ class GTMOptimizer:
                 }
                 gtm = GTM(
                     train_data=train_dataset,
+                    test_data=test_dataset,
                     seed=seed,
                     **hyperparameters,
                     **self.gtm_model_args,
@@ -194,6 +217,20 @@ class GTMOptimizer:
 
         if metric == "diversity":
             score = topic_diversity(topics, topK=self.topK)
+        elif metric == "c_nmpi": 
+            cm = CoherenceModel(topics=topics, texts=self.texts, dictionary=self.dictionary, coherence='c_npmi')
+            score = cm.get_coherence()
+        elif metric == "c_v":
+            cm = CoherenceModel(topics=topics, texts=self.texts, dictionary=self.dictionary, coherence='c_v')
+            score = cm.get_coherence()
+        elif metric == "c_uci":
+            cm = CoherenceModel(topics=topics, texts=self.texts, dictionary=self.dictionary, coherence='c_uci')
+            score = cm.get_coherence()
+        elif metric == "prediction_loss":
+            score = -1.0*gtm.prediction_loss
+        else:
+            cm = CoherenceModel(topics=topics, corpus=self.corpus, dictionary=self.dictionary, coherence='u_mass')
+            score = cm.get_coherence()    
         return score
 
     def plot_evaluation_metric(

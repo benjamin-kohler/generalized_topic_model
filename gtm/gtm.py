@@ -9,6 +9,7 @@ from sklearn.linear_model import LinearRegression
 import torch
 import torch.nn.functional as F
 from torch.utils.data import DataLoader
+import torch.multiprocessing as mp
 from tqdm import tqdm
 import plotly.graph_objects as go
 import matplotlib.pyplot as plt
@@ -35,24 +36,25 @@ class GTM:
         doc_topic_prior="dirichlet",
         update_prior=False,
         alpha=0.1,
-        prevalence_regularization_args={"alphas": [0.01, 0.1, 1.0, 10.0]},
+        prevalence_model_type = "LinearRegression",
+        prevalence_model_args = {},
         tol=0.001,
         encoder_input="bow",
-        encoder_hidden_layers=[],
+        encoder_hidden_layers=[1024,512],
         encoder_non_linear_activation="relu",
         encoder_bias=True,
-        encoder_include_prevalence_covariates=False,
-        decoder_hidden_layers=[],
-        decoder_non_linear_activation=None,
-        decoder_bias=False,
+        encoder_include_prevalence_covariates=True,
+        decoder_hidden_layers=[512,1024],
+        decoder_non_linear_activation="relu",
+        decoder_bias=True,
         predictor_type=None,
         predictor_hidden_layers=[],
-        predictor_non_linear_activation=None,
-        predictor_bias=False,
-        num_epochs=10,
-        num_workers=4,
+        predictor_non_linear_activation="relu",
+        predictor_bias=True,
+        num_epochs=1000,
+        num_workers=None,
         batch_size=64,
-        learning_rate=1e-3,
+        learning_rate=1e-4,
         dropout=0.2,
         print_every_n_epochs=1,
         print_every_n_batches=1000,
@@ -61,7 +63,7 @@ class GTM:
         log_every_n_epochs=1000,
         patience=1,
         delta=0,
-        w_prior=None,
+        w_prior=1,
         w_pred_loss=1,
         ckpt_folder="../ckpt",
         ckpt=None,
@@ -76,7 +78,8 @@ class GTM:
             doc_topic_prior: prior on the document-topic distribution. Either 'dirichlet' or 'logistic_normal'.
             update_prior: whether to update the prior at each epoch to account for prevalence covariates.
             alpha: parameter of the Dirichlet prior (only used if update_prior=False)
-            prevalence_regularization_args: dictionary with the parameters for the regularization of the prevalence covariates.
+            prevalence_model_type: type of model to estimate the prevalence of each topic. Either 'LinearRegression', 'RidgeCV', 'MultiTaskLassoCV', and 'MultiTaskElasticNetCV'.
+            prevalence_model_args: dictionary with the parameters for the GLM on topic prevalence.
             tol: tolerance threshold to stop the MLE of the Dirichlet prior (only used if update_prior=True)
             encoder_input: input to the encoder. Either 'bow' or 'embeddings'. 'bow' is a simple Bag-of-Words representation of the documents. 'embeddings' is the representation from a pre-trained embedding model (e.g. GPT, BERT, GloVe, etc.).
             encoder_hidden_layers: list with the size of the hidden layers for the encoder.
@@ -109,7 +112,6 @@ class GTM:
             seed: random seed.
 
         References:
-            - Eisenstein, J., Ahmed, A., & Xing, E. P. (2011). Sparse additive generative models of text. In Proceedings of the 28th international conference on machine learning (ICML-11) (pp. 1041-1048).
             - Nan, F., Ding, R., Nallapati, R., & Xiang, B. (2019). Topic modeling with wasserstein autoencoders. arXiv preprint arXiv:1907.12374.
         """
 
@@ -127,7 +129,8 @@ class GTM:
 
             self.update_prior = update_prior
             self.alpha = alpha
-            self.prevalence_regularization_args = prevalence_regularization_args
+            self.prevalence_model_type = prevalence_model_type
+            self.prevalence_model_args = prevalence_model_args
             self.tol = tol
             self.encoder_input = encoder_input
             if self.encoder_input not in ["bow", "embeddings"]:
@@ -167,7 +170,10 @@ class GTM:
             self.batch_size = batch_size
             self.learning_rate = learning_rate
             self.num_epochs = num_epochs
-            self.num_workers = num_workers
+            if num_workers is None: 
+                self.num_workers = mp.cpu_count()
+            else:
+                self.num_workers = num_workers
             self.dropout = dropout
 
             self.print_every_n_epochs = print_every_n_epochs
@@ -265,7 +271,7 @@ class GTM:
                     prevalence_covariate_size,
                     n_topics,
                     alpha,
-                    prevalence_regularization_args,
+                    prevalence_model_args,
                     tol,
                     device=self.device,
                 )
@@ -273,7 +279,8 @@ class GTM:
                 self.prior = LogisticNormalPrior(
                     prevalence_covariate_size,
                     n_topics,
-                    prevalence_regularization_args,
+                    prevalence_model_type,
+                    prevalence_model_args,
                     device=self.device,
                 )
 
@@ -300,6 +307,9 @@ class GTM:
                 )
 
             self.epochs = 0
+            self.reconstruction_loss = None
+            self.mmd_loss = None
+            self.prediction_loss = None
 
             self.train(train_data, test_data)
 
@@ -327,7 +337,7 @@ class GTM:
         best_loss = np.Inf
         best_epoch = -1
         self.save_model("{}/best_model.ckpt".format(self.ckpt_folder))
-
+        
         for epoch in range(self.epochs, self.num_epochs):
             training_loss = self.epoch(train_data_loader, validation=False)
 
@@ -356,7 +366,7 @@ class GTM:
             if test_data is not None:
                 if validation_loss + self.delta < best_loss:
                     best_loss = validation_loss
-                    best_epoch = epoch
+                    best_epoch = self.epochs
                     self.save_model("{}/best_model.ckpt".format(self.ckpt_folder))
                     counter = 0
                 else:
@@ -364,7 +374,7 @@ class GTM:
             else:
                 if training_loss + self.delta < best_loss:
                     best_loss = training_loss
-                    best_epoch = epoch
+                    best_epoch = self.epochs
                     self.save_model("{}/best_model.ckpt".format(self.ckpt_folder))
                     counter = 0
                 else:
@@ -372,8 +382,8 @@ class GTM:
 
             if counter >= self.patience:
                 print(
-                    "Early stopping at Epoch {}. Reverting to Epoch {}".format(
-                        epoch + 1, best_epoch + 1
+                    "\nEarly stopping at Epoch {}. Reverting to Epoch {}".format(
+                        self.epochs + 1, best_epoch + 1
                     )
                 )
                 ckpt = "{}/best_model.ckpt".format(self.ckpt_folder)
@@ -426,17 +436,18 @@ class GTM:
                 x_recon, theta_q = self.AutoEncoder(
                     x_input,
                     prevalence_covariates_bis,
-                    content_covariates,
+                    content_covariates
                 )
-            reconstruction_loss = F.cross_entropy(x_recon, x_bows)
 
+            reconstruction_loss = F.cross_entropy(x_recon, x_bows)
+            
             # Get prior on theta and compute regularization loss
             theta_prior = self.prior.sample(
                 N=x_input.shape[0],
                 M_prevalence_covariates=prevalence_covariates,
-                epoch=self.epochs,
+                epoch=self.epochs
             ).to(self.device)
-            mmd_loss = compute_mmd_loss(theta_q, theta_prior, device=self.device, t=0.1)
+            mmd_loss = compute_mmd_loss(theta_q, theta_prior, device=self.device)
 
             if self.w_prior is None:
                 mean_length = torch.sum(x_bows) / x_bows.shape[0]
@@ -462,6 +473,10 @@ class GTM:
                 + mmd_loss * w_prior
                 + prediction_loss * self.w_pred_loss
             )
+
+            self.reconstruction_loss = reconstruction_loss
+            self.mmd_loss = mmd_loss
+            self.prediction_loss = prediction_loss
 
             if not validation:
                 loss.backward()
@@ -514,7 +529,7 @@ class GTM:
         return sum(epochloss_lst)
 
     def get_doc_topic_distribution(
-        self, dataset, to_simplex=True, num_workers=1, to_numpy=True
+        self, dataset, to_simplex=True, num_workers=None, to_numpy=True
     ):
         """
         Get the topic distribution of each document in the corpus.
@@ -522,7 +537,13 @@ class GTM:
         Args:
             dataset: a GTMCorpus object
             to_simplex: whether to map the topic distribution to the simplex. If False, the topic distribution is returned in the logit space.
+            num_workers: number of workers for the data loaders.
+            to_numpy: whether to return the topic distribution as a numpy array.
         """
+
+        if num_workers is None: 
+            num_workers = self.num_workers
+
         with torch.no_grad():
             data_loader = DataLoader(
                 dataset,
@@ -567,10 +588,19 @@ class GTM:
 
         return final_thetas
 
-    def get_predictions(self, dataset, to_simplex=True, num_workers=4, to_numpy=True):
+    def get_predictions(self, dataset, to_simplex=True, num_workers=None, to_numpy=True):
         """
         Predict the labels of the documents in the corpus based on topic proportions.
+
+        Args:
+            dataset: a GTMCorpus object
+            to_simplex: whether to map the topic distribution to the simplex. If False, the topic distribution is returned in the logit space.
+            num_workers: number of workers for the data loaders.
+            to_numpy: whether to return the predictions as a numpy array.
         """
+
+        if num_workers is None: 
+            num_workers = self.num_workers
 
         with torch.no_grad():
             data_loader = DataLoader(
@@ -625,6 +655,10 @@ class GTM:
     def get_topic_words(self, l_content_covariates=[], topK=8):
         """
         Get the top words per topic, potentially influenced by content covariates.
+
+        Args:
+            l_content_covariates: list with the names of the content covariates to influence the topic-word distribution.
+            topK: number of top words to return per topic.
         """
         self.AutoEncoder.eval()
         with torch.no_grad():
@@ -649,6 +683,9 @@ class GTM:
     def get_covariate_words(self, topK=8):
         """
         Get the top words associated to a specific content covariate.
+
+        Args:
+            topK: number of top words to return per content covariate.
         """
 
         self.AutoEncoder.eval()
@@ -672,6 +709,10 @@ class GTM:
     def get_topic_word_distribution(self, l_content_covariates=[], to_numpy=True):
         """
         Get the topic-word distribution of each topic, potentially influenced by covariates.
+
+        Args:
+            l_content_covariates: list with the names of the content covariates to influence the topic-word distribution.
+            to_numpy: whether to return the topic-word distribution as a numpy array.
         """
         self.AutoEncoder.eval()
         with torch.no_grad():
@@ -691,6 +732,9 @@ class GTM:
     def get_covariate_word_distribution(self, to_numpy=True):
         """
         Get the covariate-word distribution of each topic.
+
+        Args:
+            to_numpy: whether to return the covariate-word distribution as a numpy array.
         """
         self.AutoEncoder.eval()
         with torch.no_grad():
@@ -707,6 +751,12 @@ class GTM:
     def get_top_docs(self, dataset, topic_id=None, return_df=False, topK=1):
         """
         Get the most representative documents per topic.
+
+        Args:
+            dataset: a GTMCorpus object
+            topic_id: the topic to retrieve the top documents from. If None, the top documents for all topics are returned.
+            return_df: whether to return the top documents as a DataFrame.
+            topK: number of top documents to return per topic. Otherwise, the documents are printed.
         """
         doc_topic_distribution = self.get_doc_topic_distribution(dataset)
         top_k_indices_df = pd.DataFrame(
@@ -766,7 +816,18 @@ class GTM:
     ):
         """
         Returns a wordcloud/barplot representation per topic.
+
+        Args:
+            topic_id: the topic to visualize.
+            content_covariates: list with the names of the content covariates to influence the topic-word distribution.
+            topK: number of top words to return per topic.
+            plot_type: either 'wordcloud' or 'barplot'.
+            output_path: path to save the plot.
+            wordcloud_args: dictionary with the parameters for the wordcloud plot.
+            plt_barh_args: dictionary with the parameters for the barplot plot.
+            plt_savefig_args: dictionary with the parameters for the savefig function.
         """
+
         topic_word_distribution = self.get_topic_word_distribution(
             content_covariates, to_numpy=False
         )
@@ -812,6 +873,17 @@ class GTM:
         display=True,
         output_path=None,
     ):
+        """
+        Visualize the documents in the corpus based on their topic distribution.
+
+        Args:
+            dataset: a GTMCorpus object
+            dimension_reduction: dimensionality reduction technique. Either 'umap', 'tsne' or 'pca'.
+            dimension_reduction_args: dictionary with the parameters for the dimensionality reduction technique.
+            update_layout_args: dictionary with the parameters for the layout of the plot.
+            display: whether to display the plot.
+            output_path: path to save the plot.
+        """
 
         matrix = self.get_doc_topic_distribution(dataset)
         most_prevalent_topics = np.argmax(matrix, axis=1)
@@ -887,6 +959,16 @@ class GTM:
         display=True,
         output_path=None,
     ):
+        """
+        Visualize the words in the corpus based on their topic distribution.
+
+        Args:
+            dimension_reduction: dimensionality reduction technique. Either 'umap', 'tsne' or 'pca'.
+            dimension_reduction_args: dictionary with the parameters for the dimensionality reduction technique.
+            update_layout_args: dictionary with the parameters for the layout of the plot.
+            display: whether to display the plot.
+            output_path: path to save the plot.
+        """
 
         matrix = self.get_topic_word_distribution().T
         most_prevalent_topics = np.argmax(matrix, axis=1)
@@ -964,6 +1046,16 @@ class GTM:
         display=True,
         output_path=None,
     ):
+        """
+        Visualize the topics in the corpus based on their topic distribution.
+
+        Args:
+            dataset: a GTMCorpus object
+            dimension_reduction_args: dictionary with the parameters for the dimensionality reduction technique.
+            update_layout_args: dictionary with the parameters for the layout of the plot.
+            display: whether to display the plot.
+            output_path: path to save the plot.
+        """
 
         matrix = self.get_topic_word_distribution()
         doc_topic_dist = self.get_doc_topic_distribution(dataset)
