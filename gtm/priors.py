@@ -115,15 +115,11 @@ class LogisticNormalPrior(Prior):
                 M_prevalence_covariates = torch.from_numpy(M_prevalence_covariates).to(
                     self.device
                 )
-            means = torch.matmul(M_prevalence_covariates, self.lambda_)
+            means = torch.matmul(M_prevalence_covariates, self.lambda_)       
+            z_true = torch.empty((means.shape[0], self.sigma.shape[0]))
             for i in range(means.shape[0]):
-                if i == 0:
-                    m = MultivariateNormal(means[i], self.sigma)
-                    z_true = m.sample().unsqueeze(0)
-                else:
-                    m = MultivariateNormal(means[i], self.sigma)
-                    z_temp = m.sample()
-                    z_true = torch.cat([z_true, z_temp.unsqueeze(0)], 0)
+                m = MultivariateNormal(means[i], self.sigma)
+                z_true[i] = m.sample()
         if to_simplex:
             z_true = torch.softmax(z_true, dim=1)
         return z_true.float()
@@ -133,14 +129,10 @@ class LogisticNormalPrior(Prior):
         Simulate data to test the prior's updating rule.
         """
         means = torch.matmul(M_prevalence_covariates, lambda_)
+        z_sim = torch.empty((means.shape[0], sigma.shape[0]))
         for i in range(means.shape[0]):
-            if i == 0:
-                m = MultivariateNormal(means[i], sigma)
-                z_sim = m.sample().unsqueeze(0)
-            else:
-                m = MultivariateNormal(means[i], sigma)
-                z_temp = m.sample()
-                z_sim = torch.cat([z_sim, z_temp.unsqueeze(0)], 0)
+            m = MultivariateNormal(means[i], sigma)
+            z_sim[i] = m.sample()
         if to_simplex:
             z_sim = torch.softmax(z_sim, dim=1)
         return z_sim.float()
@@ -288,14 +280,11 @@ class DirichletPrior(Prior):
                     ).to(self.device)
                 linear_preds = self.linear_model(M_prevalence_covariates)
                 alphas = torch.exp(linear_preds)
+                alphas = torch.exp(torch.matmul(M_prevalence_covariates, self.lambda_))
+                z_true = torch.empty((alphas.shape[0], self.lambda_.shape[1]))
                 for i in range(alphas.shape[0]):
-                    if i == 0:
-                        d = Dirichlet(alphas[i])
-                        z_true = d.sample().unsqueeze(0)
-                    else:
-                        d = Dirichlet(alphas[i])
-                        z_temp = d.sample()
-                        z_true = torch.cat([z_true, z_temp.unsqueeze(0)], 0)
+                    m = Dirichlet(alphas[i])
+                    z_true[i] = m.sample()
         return z_true
 
     def simulate(self, M_prevalence_covariates, lambda_):
@@ -303,14 +292,10 @@ class DirichletPrior(Prior):
         Simulate data to test the prior's updating rule.
         """
         alphas = torch.exp(torch.matmul(M_prevalence_covariates, lambda_))
+        z_sim = torch.empty((alphas.shape[0], lambda_.shape[1]))
         for i in range(alphas.shape[0]):
-            if i == 0:
-                d = Dirichlet(alphas[i])
-                z_sim = d.sample().unsqueeze(0)
-            else:
-                d = Dirichlet(alphas[i])
-                z_temp = d.sample()
-                z_sim = torch.cat([z_sim, z_temp.unsqueeze(0)], 0)
+            m = Dirichlet(alphas[i])
+            z_sim[i] = m.sample()
         return z_sim
 
     def to(self, device):

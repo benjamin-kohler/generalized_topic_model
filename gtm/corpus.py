@@ -24,7 +24,6 @@ class GTMCorpus(Dataset):
         prediction=None,
         labels=None,
         embeddings_type=None,
-        count_words=True,
         normalize_doc_length=False,
         vectorizer=None,
         vectorizer_args={},
@@ -44,7 +43,6 @@ class GTMCorpus(Dataset):
             prediction : string, formula for covariates used as inputs for the prediction task (also of the form "~ cov1 + cov2 + ..."). See the Patsy package for more details.
             labels : string, formula for labels used as outcomes for the prediction task (of the form "~ label1 + label2 + ...")
             embeddings_type : (optional) string, type of embeddings to use. Can be 'Doc2Vec' or 'SentenceTranformer'
-            count_words : boolean, whether to produce a document-term matrix or not
             normalize_doc_length : boolean, whether to normalize the document-term matrix by document length (to accomodate for varying document lengths)
             vectorizer : sklearn CountVectorizer object, if None, a new one will be created
             vectorizer_args: dict, arguments for the CountVectorizer object
@@ -61,7 +59,6 @@ class GTMCorpus(Dataset):
         self.prediction = prediction
         self.labels = labels
         self.embeddings_type = embeddings_type
-        self.count_words = count_words
         self.count_vectorizer_args = vectorizer_args
         self.normalize_doc_length = normalize_doc_length
         self.vectorizer = vectorizer
@@ -73,26 +70,21 @@ class GTMCorpus(Dataset):
         self.device = device
 
         # Compute bag of words matrix
-        if self.count_words:
-            if vectorizer is None:
-                self.vectorizer = CountVectorizer(**vectorizer_args)
-                self.M_bow = self.vectorizer.fit_transform(df["doc_clean"])
-            else:
-                self.vectorizer = vectorizer
-                self.M_bow = self.vectorizer.transform(df["doc_clean"])
-            if normalize_doc_length:
-                self.M_bow = self.M_bow / self.M_bow.sum(axis=0)
-            self.vocab = self.vectorizer.get_feature_names_out()
-            self.id2token = {
-                k: v for k, v in zip(range(0, len(self.vocab)), self.vocab)
-            }
-            self.log_word_frequencies = torch.FloatTensor(
-                np.log(np.array(self.M_bow.sum(axis=0)).flatten())
-            )
+        if vectorizer is None:
+            self.vectorizer = CountVectorizer(**vectorizer_args)
+            self.M_bow = self.vectorizer.fit_transform(df["doc_clean"])
         else:
-            self.M_bow = None
-            self.vocab = None
-            self.id2token = None
+            self.vectorizer = vectorizer
+            self.M_bow = self.vectorizer.transform(df["doc_clean"])
+        if normalize_doc_length:
+            self.M_bow = self.M_bow / self.M_bow.sum(axis=0)
+        self.vocab = self.vectorizer.get_feature_names_out()
+        self.id2token = {
+            k: v for k, v in zip(range(0, len(self.vocab)), self.vocab)
+        }
+        self.log_word_frequencies = torch.FloatTensor(
+            np.log(np.array(self.M_bow.sum(axis=0)).flatten())
+        )
 
         # Create embeddings matrix
         self.M_embeddings = None
@@ -169,12 +161,11 @@ class GTMCorpus(Dataset):
 
         d = {}
 
-        if self.M_bow is not None:
-            if type(self.M_bow[i]) == scipy.sparse.csr_matrix:
-                M_bow_sample = torch.FloatTensor(self.M_bow[i].todense())
-            else:
-                M_bow_sample = torch.FloatTensor(self.M_bow[i])
-            d["M_bow"] = M_bow_sample
+        if type(self.M_bow[i]) == scipy.sparse.csr_matrix:
+            M_bow_sample = torch.FloatTensor(self.M_bow[i].todense())
+        else:
+            M_bow_sample = torch.FloatTensor(self.M_bow[i])
+        d["M_bow"] = M_bow_sample
 
         if self.M_embeddings is not None:
             d["M_embeddings"] = self.M_embeddings[i]
