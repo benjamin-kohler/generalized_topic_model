@@ -101,11 +101,11 @@ class LogisticNormalPrior(Prior):
         self.lambda_ = self.lambda_ - self.lambda_[:, 0][:, None]
         self.lambda_ = self.lambda_.to(torch.float32)
 
-    def sample(self, N, M_prevalence_covariates, to_simplex=True, epoch=None):
+    def sample(self, N, M_prevalence_covariates, to_simplex=True, epoch=None, initialization=False):
         """
         Sample from the prior.
         """
-        if self.prevalence_covariates_size == 0:
+        if self.prevalence_covariates_size == 0 or initialization:
             z_true = np.random.randn(N, self.n_topics)
             z_true = torch.from_numpy(z_true).to(
                     self.device
@@ -190,6 +190,7 @@ class DirichletPrior(Prior):
 
     def __init__(
         self,
+        update_prior,
         prevalence_covariates_size,
         n_topics,
         alpha,
@@ -197,16 +198,17 @@ class DirichletPrior(Prior):
         tol,
         device,
     ):
+        self.update_prior = update_prior
         self.prevalence_covariates_size = prevalence_covariates_size
         self.n_topics = n_topics
         self.alpha = alpha
-        if prevalence_model_args is None:
+        if prevalence_model_args == {}:
             self.prevalence_model_args = {"alphas":[0,0.1,1,10]}
         else:
             self.prevalence_model_args = prevalence_model_args
         self.tol = tol
-        self.lambda_ = None
         self.device = device
+        self.lambda_ = None
         if prevalence_covariates_size != 0:
             self.linear_model = LinearModel(prevalence_covariates_size, n_topics).to(
                 self.device
@@ -263,13 +265,14 @@ class DirichletPrior(Prior):
 
                 self.lambda_ = self.linear_model.linear.weight.detach().T
                 self.lambda_ = self.lambda_ - self.lambda_[:, 0][:, None]
-                self.lambda_ = self.lambda_.cpu().numpy()
+                #self.lambda_ = self.lambda_.cpu().numpy()
 
-    def sample(self, N, M_prevalence_covariates, epoch=10):
+    def sample(self, N, M_prevalence_covariates, epoch=10, initialization=True):
         """
         Sample from the prior.
         """
-        if self.prevalence_covariates_size == 0 or epoch == 0:
+
+        if self.prevalence_covariates_size == 0 or epoch == 0 or self.update_prior == False or initialization:
             z_true = np.random.dirichlet(np.ones(self.n_topics) * self.alpha, size=N)
             z_true = torch.from_numpy(z_true).float()
         else:

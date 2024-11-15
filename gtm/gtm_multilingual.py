@@ -1,8 +1,9 @@
 #!/usr/bin/env python
-# -*- encoding: utf-8 -*-
+# -*- encoding: utf-8 -*-   
 
 import os
 import time
+import random
 import numpy as np
 import pandas as pd
 from sklearn.linear_model import LinearRegression
@@ -17,362 +18,324 @@ from wordcloud import WordCloud
 from sklearn.decomposition import PCA
 from sklearn.manifold import TSNE
 from umap import UMAP
-from autoencoders import AutoEncoderMLP
+from autoencoders import EncoderMLP, DecoderMLP
 from predictors import Predictor
 from priors import DirichletPrior, LogisticNormalPrior
 from utils import compute_mmd_loss, top_k_indices_column
-import os
-import torch
-import numpy as np
-import torch.multiprocessing as mp
-from typing import Optional, List, Dict, Union
-from corpus import GTMCorpus
+from typing import Optional, Dict, Any, Union
+from corpus_multilingual import GTMCorpus_Multilingual
 
-class GTM:
+class GTM_Multilingual:
     """
-    Wrapper class for the Generalized Topic Model.
+    Wrapper class for the Generalized Topic Model's multilingual variant.
     """
-
     def __init__(
         self,
-        train_data: Optional[GTMCorpus] = None,
-        test_data: Optional[GTMCorpus] = None,
+        train_data: Optional[GTMCorpus_Multilingual] = None,
+        test_data: Optional[GTMCorpus_Multilingual] = None,
         n_topics: int = 20,
-        doc_topic_prior: str = "dirichlet",
+        doc_topic_prior: str = "logistic_normal",
         update_prior: bool = False,
         alpha: float = 0.1,
-        prevalence_model_type: str = "RidgeCV",
-        prevalence_model_args: Dict = {},
+        prevalence_model_type: str = "LinearRegression",
+        prevalence_model_args: Dict[str, Any] = {},
         tol: float = 0.001,
-        encoder_input: str = "bow",
-        encoder_hidden_layers: List[int] = [512],
-        encoder_non_linear_activation: str = "relu",
-        encoder_bias: bool = True,
-        encoder_include_prevalence_covariates: bool = True,
-        decoder_hidden_layers: List[int] = [300],
-        decoder_non_linear_activation: Optional[str] = None,
-        decoder_bias: bool = False,
-        predictor_type: Optional[str] = None,
-        predictor_hidden_layers: List[int] = [],
-        predictor_non_linear_activation: str = "relu",
-        predictor_bias: bool = True,
-        initialization: Optional[bool] = True,
+        encoder_args: Optional[Dict[str, Any]] = None,
+        decoder_args: Optional[Dict[str, Any]] = None,
+        predictor_type: str = "classifier",
+        predictor_args: Optional[Dict[str, Any]] = None,
         num_epochs: int = 1000,
-        num_workers: Optional[int] = 4,
+        num_workers: Optional[int] = None,
         batch_size: int = 64,
         learning_rate: float = 1e-3,
         dropout: float = 0.2,
-        regularization: float = 0,
         print_every_n_epochs: int = 1,
-        print_every_n_batches: int = 10000,
+        print_every_n_batches: int = 1000,
         print_topics: bool = True,
         print_content_covariates: bool = True,
-        log_every_n_epochs: int = 10000,
+        log_every_n_epochs: int = 1000,
         patience: int = 1,
-        delta: float = 0.0,
-        w_prior: Union[int, None] = 1,
-        w_pred_loss: int = 1,
+        delta: float = 0,
+        w_prior: Union[float, None] = 1,
+        w_pred_loss: float = 1,
         ckpt_folder: str = "../ckpt",
         ckpt: Optional[str] = None,
-        device: Optional[torch.device] = None,
-        seed: Optional[int] = 42,
-    ) -> None:
+        device: Optional[str] = None,
+        seed: int = 42,
+    ):
         """
-        Args:
-            train_data: a GTMCorpus object
-            test_data: a GTMCorpus object
-            n_topics: number of topics
-            doc_topic_prior: prior on the document-topic distribution. Either 'dirichlet' or 'logistic_normal'.
-            update_prior: whether to update the prior at each epoch to account for prevalence covariates.
-            alpha: parameter of the Dirichlet prior (only used if update_prior=False)
-            prevalence_model_type: type of model to estimate the prevalence of each topic. Either 'LinearRegression', 'RidgeCV', 'MultiTaskLassoCV', and 'MultiTaskElasticNetCV'.
-            prevalence_model_args: dictionary with the parameters for the GLM on topic prevalence.
-            tol: tolerance threshold to stop the MLE of the Dirichlet prior (only used if update_prior=True)
-            encoder_input: input to the encoder. Either 'bow' or 'embeddings'. 'bow' is a simple Bag-of-Words representation of the documents. 'embeddings' is the representation from a pre-trained embedding model (e.g. GPT, BERT, GloVe, etc.).
-            encoder_hidden_layers: list with the size of the hidden layers for the encoder.
-            encoder_non_linear_activation: non-linear activation function for the encoder.
-            encoder_bias: whether to use bias in the encoder.
-            decoder_hidden_layers: list with the size of the hidden layers for the decoder (only used with decoder_type='mlp').
-            decoder_non_linear_activation: non-linear activation function for the decoder (only used with decoder_type='mlp').
-            decoder_bias: whether to use bias in the decoder (only used with decoder_type='mlp').
-            predictor_type: type of predictor. Either 'classifier' or 'regressor'. 'classifier' predicts a categorical variable, 'regressor' predicts a continuous variable.
-            predictor_hidden_layers: list with the size of the hidden layers for the predictor.
-            predictor_non_linear_activation: non-linear activation function for the predictor.
-            predictor_bias: whether to use bias in the predictor.
-            num_epochs: number of epochs to train the model.
-            num_workers: number of workers for the data loaders.
-            batch_size: batch size for training.
-            learning_rate: learning rate for training.
-            dropout: dropout rate for training.
-            print_every_n_epochs: number of epochs between each print.
-            print_every_n_batches: number of batches between each print.
-            print_topics: whether to print the top words per topic at each print.
-            print_content_covariates: whether to print the top words associated to each content covariate at each print.
-            log_every_n_epochs: number of epochs between each checkpoint.
-            patience: number of epochs to wait before stopping the training if the validation or training loss does not improve.
-            delta: threshold to stop the training if the validation or training loss does not improve.
-            w_prior: parameter to control the tightness of the encoder output with the document-topic prior. If set to None, w_prior is chosen automatically.
-            w_pred_loss: parameter to control the weight given to the prediction task in the likelihood. Default is 1.
-            ckpt_folder: folder to save the checkpoints.
-            ckpt: checkpoint to load the model from.
-            device: device to use for training.
-            seed: random seed.
+        Initialize the MultilingualGTM model.
+        """
 
-        References:
-            - Nan, F., Ding, R., Nallapati, R., & Xiang, B. (2019). Topic modeling with wasserstein autoencoders. arXiv preprint arXiv:1907.12374.
-        """
+        encoder_args = encoder_args or {
+            "encoder_hidden_layers": [512],
+            "encoder_non_linear_activation": "relu",
+            "encoder_bias": True,
+            "encoder_include_prevalence_covariates": True,
+        }
+        decoder_args = decoder_args or {
+            "all_languages": {
+                "decoder_hidden_layers": [512],
+                "decoder_non_linear_activation": "relu",
+                "decoder_bias": True,
+            }
+        }
+
+        self.predictor_type = predictor_type
+
+        self.predictor_args = predictor_args or {
+            "predictor_hidden_layers": [],
+            "predictor_non_linear_activation": "relu",
+            "predictor_bias": True,
+        }
 
         if ckpt:
             self.load_model(ckpt)
+            return
+
+        self.n_topics = n_topics
+        self.topic_labels = [f"Topic_{i}" for i in range(n_topics)]
+        self.doc_topic_prior = doc_topic_prior
+
+        self.update_prior = update_prior
+        self.alpha = alpha
+        self.prevalence_model_type = prevalence_model_type
+        self.prevalence_model_args = prevalence_model_args
+        self.tol = tol
+
+        self.device = device or self._get_device()
+        self.batch_size = batch_size
+        self.learning_rate = learning_rate
+        self.num_epochs = num_epochs
+        self.num_workers = num_workers or mp.cpu_count()
+        self.dropout = dropout
+
+        self.print_every_n_epochs = print_every_n_epochs
+        self.print_every_n_batches = print_every_n_batches
+        self.print_topics = print_topics
+        self.print_content_covariates = print_content_covariates
+        self.log_every_n_epochs = log_every_n_epochs
+        self.patience = patience
+        self.delta = delta
+        self.w_prior = w_prior
+        self.w_pred_loss = w_pred_loss
+        self.ckpt_folder = ckpt_folder
+
+        self._ensure_ckpt_folder_exists()
+
+        self.seed = seed
+        self._set_seed(seed)
+
+        self.languages = train_data.languages
+        self.ref_lang = self.languages[0]
+
+        self.prevalence_covariate_size, self.prevalence_colnames = self._get_prevalence_covariate_info(train_data)
+        self.content_covariate_size, self.content_colnames = self._get_content_covariate_info(train_data)
+        self.prediction_covariate_size, self.prediction_colnames = self._get_prediction_covariate_info(train_data)
+        self.labels_size, self.n_labels = self._get_labels_info(train_data)
+
+        self.encoder_args = encoder_args
+        self.decoder_args = self._set_language_specific_args(decoder_args)
+
+        self.Encoder, self.Decoders, self.id2token = self._initialize_encoder_decoder(train_data)
+        self.prior = self._initialize_prior()
+        self.predictor = self._initialize_predictor()
+
+        self.optimizer = self._initialize_optimizer()
+
+        self.epochs = 0
+        self.loss = np.Inf
+        self.reconstruction_loss = np.Inf
+        self.mmd_loss = np.Inf
+        self.prediction_loss = np.Inf
+
+        self.train(train_data, test_data)
+
+    def _get_device(self):
+        if torch.cuda.is_available():
+            return torch.device("cuda")
+        elif torch.backends.mps.is_available():
+            return torch.device("mps")
+        return torch.device("cpu")
+
+    def _ensure_ckpt_folder_exists(self):
+        if not os.path.exists(self.ckpt_folder):
+            os.makedirs(self.ckpt_folder)
+
+    def _set_seed(self, seed):
+        if seed is not None:
+            torch.manual_seed(seed)
+            torch.backends.cudnn.deterministic = True
+            np.random.seed(seed)
+            random.seed(seed)
+
+    def _get_prevalence_covariate_info(self, train_data):
+        if train_data.prevalence is not None:
+            prevalence_covariate_size = train_data.M_prevalence_covariates.shape[1]
+            prevalence_colnames = train_data.prevalence_colnames
         else:
-            self.n_topics = n_topics
-            self.topic_labels = [f"Topic_{i}" for i in range(n_topics)]
-            self.doc_topic_prior = doc_topic_prior
+            prevalence_covariate_size = 0
+            prevalence_colnames = []
+        return prevalence_covariate_size, prevalence_colnames
 
-            self.update_prior = update_prior
-            self.alpha = alpha
-            self.prevalence_model_type = prevalence_model_type
-            self.prevalence_model_args = prevalence_model_args
-            self.tol = tol
-            self.encoder_input = encoder_input
+    def _get_content_covariate_info(self, train_data):
+        if train_data.content is not None:
+            content_covariate_size = train_data.M_content_covariates.shape[1]
+            content_colnames = train_data.content_colnames
+        else:
+            content_covariate_size = 0
+            content_colnames = []
+        return content_covariate_size, content_colnames
 
-            self.encoder_hidden_layers = encoder_hidden_layers
-            self.encoder_non_linear_activation = encoder_non_linear_activation
+    def _get_prediction_covariate_info(self, train_data):
+        if train_data.prediction is not None:
+            prediction_covariate_size = train_data.M_prediction_covariates.shape[1]
+            prediction_colnames = train_data.prediction_colnames
+        else:
+            prediction_covariate_size = 0
+            prediction_colnames = []
+        return prediction_covariate_size, prediction_colnames
 
-            self.encoder_bias = encoder_bias
-            self.encoder_include_prevalence_covariates = encoder_include_prevalence_covariates
-            self.decoder_hidden_layers = decoder_hidden_layers
-            self.decoder_non_linear_activation = decoder_non_linear_activation
-
-            self.decoder_bias = decoder_bias
-            self.predictor_type = predictor_type
-            self.predictor_hidden_layers = predictor_hidden_layers
-            self.predictor_non_linear_activation = predictor_non_linear_activation
-            self.predictor_bias = predictor_bias
-
-            self.initialization = initialization
-            self.device = device
-            self.batch_size = batch_size
-            self.learning_rate = learning_rate
-            self.num_epochs = num_epochs
-            self.num_workers = num_workers if num_workers is not None else mp.cpu_count()
-            self.dropout = dropout
-            self.regularization = regularization
-
-            self.print_every_n_epochs = print_every_n_epochs
-            self.print_every_n_batches = print_every_n_batches
-            self.print_topics = print_topics
-            self.print_content_covariates = print_content_covariates
-            self.log_every_n_epochs = log_every_n_epochs
-            self.patience = patience
-            self.delta = delta
-            self.w_prior = w_prior
-            self.w_pred_loss = w_pred_loss
-            self.ckpt_folder = ckpt_folder
-
-            if not os.path.exists(ckpt_folder):
-                os.makedirs(ckpt_folder)
-
-            self.seed = seed
-            if seed is not None:
-                torch.manual_seed(seed)
-                torch.backends.cudnn.deterministic = True
-                np.random.seed(seed)
-
-            if device is None:
-                if torch.cuda.is_available():
-                    self.device = torch.device("cuda")
-                elif torch.backends.mps.is_available():
-                    self.device = torch.device("mps")
-                else:
-                    self.device = torch.device("cpu")
-
-            bow_size = train_data.M_bow.shape[1]
-            self.bow_size = bow_size
-
-            prevalence_covariate_size = train_data.M_prevalence_covariates.shape[1] if train_data.prevalence is not None else 0
-            content_covariate_size = train_data.M_content_covariates.shape[1] if train_data.content is not None else 0
-            prediction_covariate_size = train_data.M_prediction.shape[1] if train_data.prediction is not None else 0
-            labels_size = train_data.M_labels.shape[1] if train_data.labels is not None else 0
-
-            if train_data.content_colnames is not None:
-                self.content_colnames = train_data.content_colnames
-            else:
-                self.content_colnames = []
-
-            if predictor_type == "classifier" and train_data.labels is not None:
+    def _get_labels_info(self, train_data):
+        if train_data.labels is not None:
+            labels_size = train_data.M_labels.shape[1]
+            if self.predictor_type == "classifier":
                 n_labels = len(np.unique(train_data.M_labels))
             else:
                 n_labels = 1
+        else:
+            labels_size = 0
+            n_labels = 0
+        return labels_size, n_labels
 
-            if encoder_input == "bow":
-                self.input_size = bow_size
-            elif encoder_input == "embeddings":
-                input_embeddings_size = train_data.M_embeddings.shape[1]
-                self.input_size = input_embeddings_size
+    def _set_language_specific_args(self, args):
+        if "all_languages" in args:
+            return {lang: args["all_languages"] for lang in self.languages}
+        return args
 
-            self.content_covariate_size = content_covariate_size
-            self.prevalence_covariate_size = prevalence_covariate_size
-            self.labels_size = labels_size
-            self.id2token = train_data.id2token
+    def _initialize_encoder_decoder(self, train_data):
+        """
+        Initialize the big encoder and language-specific decoders.
+        """
+        # Initialize the shared encoder
+        encoder_dims = self._get_encoder_dims(train_data)
+        Encoder = EncoderMLP(
+            encoder_dims=encoder_dims,
+            encoder_non_linear_activation=self.encoder_args["encoder_non_linear_activation"],
+            encoder_bias=self.encoder_args["encoder_bias"],
+            dropout=self.dropout,
+        ).to(self.device)
 
-            encoder_dims = [self.input_size + prevalence_covariate_size] if self.encoder_include_prevalence_covariates else [self.input_size]
-            encoder_dims.extend(encoder_hidden_layers)
-            encoder_dims.append(n_topics)
-
-            decoder_dims = [n_topics + content_covariate_size]
-            decoder_dims.extend(decoder_hidden_layers)
-            decoder_dims.append(bow_size)
-
-            self.AutoEncoder = AutoEncoderMLP(
-                encoder_dims=encoder_dims,
-                encoder_non_linear_activation=encoder_non_linear_activation,
-                encoder_bias=encoder_bias,
+        # Initialize language-specific decoders
+        Decoders = {}
+        id2token = {}
+        for lang in self.languages:
+            decoder_dims = self._get_decoder_dims(lang, train_data)
+            Decoders[lang] = DecoderMLP(
                 decoder_dims=decoder_dims,
-                decoder_non_linear_activation=decoder_non_linear_activation,
-                decoder_bias=decoder_bias,
-                dropout=dropout,
+                decoder_non_linear_activation=self.decoder_args[lang]['decoder_non_linear_activation'],
+                decoder_bias=self.decoder_args[lang]['decoder_bias'],
+                dropout=self.dropout,
             ).to(self.device)
+            id2token[lang] = {idx: token for idx, token in enumerate(train_data.vectorizers[lang].get_feature_names_out())}
 
-            if doc_topic_prior == "dirichlet":
-                self.prior = DirichletPrior(
-                    self.update_prior,
-                    self.prevalence_covariate_size,
-                    self.n_topics,
-                    self.alpha,
-                    self.prevalence_model_args,
-                    self.tol,
-                    device=self.device,
-                )
-            elif doc_topic_prior == "logistic_normal":
-                self.prior = LogisticNormalPrior(
-                    prevalence_covariate_size,
-                    n_topics,
-                    prevalence_model_type,
-                    prevalence_model_args,
-                    device=self.device,
-                )
+        return Encoder, Decoders, id2token
 
-            if labels_size != 0:
-                predictor_dims = [n_topics + prediction_covariate_size]
-                predictor_dims.extend(predictor_hidden_layers)
-                predictor_dims.append(n_labels)
-                self.predictor = Predictor(
-                    predictor_dims=predictor_dims,
-                    predictor_non_linear_activation=predictor_non_linear_activation,
-                    predictor_bias=predictor_bias,
-                    dropout=dropout,
-                ).to(self.device)
-
-            if self.labels_size != 0:
-                self.optimizer = torch.optim.Adam(
-                    list(self.AutoEncoder.parameters()) + list(self.predictor.parameters()),
-                    lr=self.learning_rate, betas=(0.99, 0.999)#, weight_decay=0.1
-                )
-            else:
-                self.optimizer = torch.optim.Adam(
-                    self.AutoEncoder.parameters(), lr=self.learning_rate, betas=(0.9, 0.999)#, weight_decay=0.1
-                )
-
-            self.epochs = 0
-            self.loss = np.Inf
-            self.reconstruction_loss = np.Inf
-            self.mmd_loss = np.Inf
-            self.prediction_loss = np.Inf
-
-            if self.initialization and self.update_prior:
-                self.initialize(train_data, test_data)
-
-            self.train(train_data, test_data)
-
-    def initialize(self, train_data, test_data=None):
+    def _get_encoder_dims(self, train_data):
         """
-        Train a rough initial model using Adam optimizer without modifying the learning rate.
-        Stops as soon as the validation loss stops improving (patience == 1).
-        Saves the best model before the loss stopped improving.
+        Get dimensions for the big encoder.
         """
-        train_data_loader = DataLoader(
-            train_data,
-            batch_size=self.batch_size,
-            shuffle=True,
-            num_workers=self.num_workers,
+        encoder_hidden_layers = self.encoder_args["encoder_hidden_layers"]
+        encoder_include_prevalence_covariates = self.encoder_args["encoder_include_prevalence_covariates"]
+
+        bow_size = train_data.M_bow_combined.shape[1]
+        self.bow_size = bow_size
+
+        if encoder_include_prevalence_covariates:
+            encoder_dims = [bow_size + self.prevalence_covariate_size]
+        else:
+            encoder_dims = [bow_size]
+        encoder_dims.extend(encoder_hidden_layers)
+        encoder_dims.append(self.n_topics)
+
+        return encoder_dims
+
+    def _get_decoder_dims(self, lang, train_data):
+        """
+        Get dimensions for language-specific decoders.
+        """
+        decoder_hidden_layers = self.decoder_args[lang]['decoder_hidden_layers']
+
+        bow_size = train_data.language_bow_matrices[lang].shape[1]
+        decoder_dims = [self.n_topics + self.content_covariate_size]
+        decoder_dims.extend(decoder_hidden_layers)
+        decoder_dims.append(bow_size)
+
+        return decoder_dims
+
+    def _initialize_prior(self):
+        if self.doc_topic_prior == "dirichlet":
+            return DirichletPrior(
+                self.update_prior,
+                self.prevalence_covariate_size,
+                self.n_topics,
+                self.alpha,
+                self.prevalence_model_args,
+                self.tol,
+                device=self.device,
+            )
+        return LogisticNormalPrior(
+            self.prevalence_covariate_size,
+            self.n_topics,
+            self.prevalence_model_type,
+            self.prevalence_model_args,
+            device=self.device,
         )
 
-        if test_data is not None:
-            test_data_loader = DataLoader(
-                test_data,
-                batch_size=self.batch_size,
-                shuffle=True,
-                num_workers=self.num_workers,
+    def _initialize_predictor(self):
+        if self.labels_size == 0:
+            return None
+
+        predictor_dims = [self.n_topics + self.prediction_covariate_size]
+        predictor_dims.extend(self.predictor_args['predictor_hidden_layers'])
+        predictor_dims.append(self.n_labels)
+
+        return Predictor(
+            predictor_dims=predictor_dims,
+            predictor_non_linear_activation=self.predictor_args['predictor_non_linear_activation'],
+            predictor_bias=self.predictor_args['predictor_bias'],
+            dropout=self.dropout,
+        ).to(self.device)
+
+    def _initialize_optimizer(self):
+        list_of_encoder_parameters = list(self.Encoder.parameters())
+        list_of_decoder_parameters = []
+        for lang in self.languages:
+            list_of_decoder_parameters += list(self.Decoders[lang].parameters())
+
+        if self.labels_size != 0:
+            list_of_predictor_parameters = list(self.predictor.parameters())
+            return torch.optim.Adam(
+                list_of_encoder_parameters + list_of_decoder_parameters + list_of_predictor_parameters,
+                lr=self.learning_rate,
             )
-
-        best_loss = np.Inf
-        counter = 0
-        best_model_path = f"{self.ckpt_folder}/best_initial_model.ckpt"
-
-        for epoch in range(self.num_epochs):
-            training_loss = self.epoch(train_data_loader, validation=False, initialization=True)
-            
-            if test_data is not None:
-                validation_loss = self.epoch(test_data_loader, validation=True, initialization=True)
-                current_loss = validation_loss
-            else:
-                current_loss = training_loss
-
-            loss_improved = current_loss < best_loss
-
-            if loss_improved:
-                best_loss = current_loss
-                counter = 0  
-                self.save_model(best_model_path)
-            else:
-                counter += 1
-
-            if counter >= 1:
-                print(f"Initialization completed in {epoch+1} epochs.")
-                break
-
-        self.load_model(best_model_path)
-
-        if self.update_prior:
-            if self.doc_topic_prior == "dirichlet":
-                posterior_theta = self.get_doc_topic_distribution(train_data, to_numpy=True)
-                self.prior.update_parameters(
-                    posterior_theta, train_data.M_prevalence_covariates
-                )
-            else:
-                posterior_theta = self.get_doc_topic_distribution(
-                    train_data, to_simplex=False, to_numpy=True
-                )
-                self.prior.update_parameters(
-                    posterior_theta, train_data.M_prevalence_covariates
-                )             
+        return torch.optim.Adam(
+            list_of_encoder_parameters + list_of_decoder_parameters, 
+            lr=self.learning_rate
+        )
 
     def train(self, train_data, test_data=None):
         """
         Train the model.
         """
 
-        current_lr = self.learning_rate
-
-        train_data_loader = DataLoader(
-            train_data,
-            batch_size=self.batch_size,
-            shuffle=True,
-            num_workers=self.num_workers,
-        )
-
+        langs, train_data_loaders = train_data._get_dataloaders(self.batch_size, self.num_workers)
         if test_data is not None:
-            test_data_loader = DataLoader(
-                test_data,
-                batch_size=self.batch_size,
-                shuffle=True,
-                num_workers=self.num_workers,
-            )
+            langs, test_data_loaders = test_data._get_dataloaders(self.batch_size, self.num_workers)
 
         counter = 0
         self.save_model("{}/best_model.ckpt".format(self.ckpt_folder))
-
+        
         if self.epochs == 0:
             best_loss = np.Inf
             best_epoch = -1
@@ -380,17 +343,30 @@ class GTM:
         else:
             best_loss = self.loss
             best_epoch = self.epochs
-
+        
         for epoch in range(self.epochs+1, self.num_epochs):
-
-            training_loss = self.epoch(train_data_loader, validation=False)
+            training_loss = self.epoch(train_data_loaders, langs=langs, validation=False)
 
             if test_data is not None:
-                validation_loss = self.epoch(test_data_loader, validation=True)
+                validation_loss = self.epoch(test_data_loaders, langs=langs, validation=True)
 
             if (epoch + 1) % self.log_every_n_epochs == 0:
                 save_name = f'{self.ckpt_folder}/GTM_K{self.n_topics}_{self.doc_topic_prior}_{self.predictor_type}_{time.strftime("%Y-%m-%d-%H-%M", time.localtime())}_{self.epochs+1}.ckpt'
                 self.save_model(save_name)
+
+            if self.update_prior:
+                if self.doc_topic_prior == "dirichlet":
+                    posterior_theta = self.get_doc_topic_distribution(train_data)
+                    self.prior.update_parameters(
+                        posterior_theta, train_data.M_prevalence_covariates
+                    )
+                else:
+                    posterior_theta = self.get_doc_topic_distribution(
+                        train_data, to_simplex=False
+                    )
+                    self.prior.update_parameters(
+                        posterior_theta, train_data.M_prevalence_covariates
+                    )
 
             # Stopping rule for the optimization routine
             if test_data is not None:
@@ -410,101 +386,82 @@ class GTM:
                 else:
                     counter += 1
 
-            if counter >= self.patience or (epoch + 1) == self.num_epochs:
-
+            if counter >= self.patience:
+                print(
+                    "\nEarly stopping at Epoch {}. Reverting to Epoch {}".format(
+                        self.epochs + 1, best_epoch + 1
+                    )
+                )
                 ckpt = "{}/best_model.ckpt".format(self.ckpt_folder)
                 self.load_model(ckpt)
-
-                for param_group in self.optimizer.param_groups:
-                    param_group['lr'] = current_lr*0.1
-                    current_lr = param_group['lr']
-                
-                #print(current_lr)
-
-                if current_lr < 1e-3:
-                    print(
-                        "\nStopping at Epoch {}. Reverting to Epoch {}".format(
-                            self.epochs + 1, best_epoch + 1
-                        )
-                    )
-                    ckpt = "{}/best_model.ckpt".format(self.ckpt_folder)
-                    self.load_model(ckpt)
-                    break
+                break
 
             self.epochs += 1
 
-
-    def epoch(self, data_loader, validation=False, initialization=False, num_samples=1):
+    def epoch(self, data_loaders, langs, validation=False):
         """
         Train the model for one epoch.
         """
         if validation:
-            self.AutoEncoder.eval()
+            self.Encoder.eval()
+            for lang in self.languages:
+                self.Decoders[lang].eval()
             if self.labels_size != 0:
                 self.predictor.eval()
         else:
-            self.AutoEncoder.train()
+            self.Encoder.train()
+            for lang in self.languages:
+                self.Decoders[lang].train()
             if self.labels_size != 0:
                 self.predictor.train()
 
         epochloss_lst = []
-        all_topics = []
-        all_prevalence_covariates = []
-        with torch.no_grad() if validation else torch.enable_grad():
+
+        for i,data_loader in enumerate(data_loaders):
             for iter, data in enumerate(data_loader):
+                
                 if not validation:
                     self.optimizer.zero_grad()
 
-                # Unpack data
                 for key, value in data.items():
                     data[key] = value.to(self.device)
-                bows = data.get("M_bow", None)
-                bows = bows.reshape(bows.shape[0], -1)
-                embeddings = data.get("M_embeddings", None)
+
+                # Unpack data
+                bows_combined = data.get("M_bow_combined", None)
+                bows_combined = bows_combined.reshape(bows_combined.shape[0], -1)
                 prevalence_covariates = data.get("M_prevalence_covariates", None)
                 content_covariates = data.get("M_content_covariates", None)
                 prediction_covariates = data.get("M_prediction", None)
                 target_labels = data.get("M_labels", None)
-                if self.encoder_input == "bow":
-                    x_input = bows
-                elif self.encoder_input == "embeddings":
-                    x_input = embeddings
-                x_bows = bows
-
-                # Get theta and compute reconstruction loss
-                if self.encoder_include_prevalence_covariates:
-                    x_recon, theta_q, z = self.AutoEncoder(
-                        x_input, 
-                        prevalence_covariates, 
-                        content_covariates,
-                    )
-                else:
-                    prevalence_covariates_bis = None
-                    x_recon, theta_q, z = self.AutoEncoder(
-                        x_input,
-                        prevalence_covariates_bis,
-                        content_covariates,
-                    )
-
-                reconstruction_loss = F.cross_entropy(x_recon, x_bows)
                 
-                # Compute MMD Loss with multiple samples
-                mmd_loss = 0.0
-                for _ in range(num_samples):
-                    theta_prior = self.prior.sample(
-                        N=x_input.shape[0],
-                        M_prevalence_covariates=prevalence_covariates,
-                        epoch=self.epochs,
-                        initialization=initialization
-                    ).to(self.device)
-                    mmd_loss += compute_mmd_loss(theta_q, theta_prior, device=self.device)
-
-                if self.w_prior is None:
-                    mean_length = torch.sum(x_bows) / x_bows.shape[0]
-                    vocab_size = x_bows.shape[1]
-                    w_prior = mean_length * np.log(vocab_size)
+                # Get theta
+                if prevalence_covariates is not None and self.encoder_args["encoder_include_prevalence_covariates"]:
+                    x_input = torch.cat((bows_combined, prevalence_covariates), 1)
                 else:
-                    w_prior = self.w_prior #* self.epochs + 1
+                    x_input = bows_combined
+                z = self.Encoder(x_input)
+                theta_q = F.softmax(z, dim=1)
+                if content_covariates is not None:
+                    theta = torch.cat((theta_q, content_covariates), 1)
+                else:
+                    theta = theta_q
+
+                # Decode for each language and sum reconstruction losses
+                reconstruction_loss = 0
+                for lang in self.languages:
+                    if lang in langs[i]:
+                        x_output = data["M_bow_" + lang]
+                        x_output = x_output.reshape(x_output.shape[0], -1)
+                        x_recon = self.Decoders[lang](theta)
+                        reconstruction_loss += F.cross_entropy(x_recon, x_output)
+
+                # Get prior on theta and compute regularization loss
+                theta_prior = self.prior.sample(
+                    N=x_input.shape[0],
+                    M_prevalence_covariates=prevalence_covariates,
+                    epoch=self.epochs
+                ).to(self.device)
+                mmd_loss = compute_mmd_loss(theta_q, theta_prior, device=self.device)
 
                 # Predict labels and compute prediction loss
                 if target_labels is not None:
@@ -517,17 +474,11 @@ class GTM:
                 else:
                     prediction_loss = 0
 
-                # L2 Normalization for encoders/decoders
-                l2_norm = 0
-                for param in self.AutoEncoder.parameters():
-                    l2_norm += torch.norm(param, p=2)
-
                 # Total loss
                 loss = (
                     reconstruction_loss
-                    + mmd_loss * w_prior
+                    + mmd_loss * self.w_prior
                     + prediction_loss * self.w_pred_loss
-                    + self.regularization * l2_norm
                 )
 
                 self.loss = loss
@@ -537,24 +488,18 @@ class GTM:
 
                 if not validation:
                     loss.backward()
-                    self.optimizer.step()      
+                    self.optimizer.step()
 
                 epochloss_lst.append(loss.item())
-                if self.update_prior is True and initialization is False and validation is False:
-                    if self.doc_topic_prior == "logistic_normal":
-                        all_topics.append(z.detach().cpu())
-                    elif self.doc_topic_prior == "dirichlet":
-                        all_topics.append(theta_q.detach().cpu())
-                    all_prevalence_covariates.append(prevalence_covariates.detach().cpu())
 
                 if (iter + 1) % self.print_every_n_batches == 0:
                     if validation:
                         print(
-                            f"Epoch {(self.epochs+1):>3d}\tIter {(iter+1):>4d}\tMean Validation Loss:{loss.item():<.7f}\nMean Rec Loss:{reconstruction_loss.item():<.7f}\nMMD Loss:{mmd_loss.item()*w_prior:<.7f}\nMean Pred Loss:{prediction_loss*self.w_pred_loss:<.7f}\n"
+                            f"Epoch {(self.epochs+1):>3d}\tIter {(iter+1):>4d}\tMean Validation Loss:{loss.item():<.7f}\nMean Rec Loss:{reconstruction_loss.item():<.7f}\nMMD Loss:{mmd_loss.item()*self.w_prior:<.7f}\nMean Pred Loss:{prediction_loss*self.w_pred_loss:<.7f}\n"
                         )
                     else:
                         print(
-                            f"Epoch {(self.epochs+1):>3d}\tIter {(iter+1):>4d}\tMean Training Loss:{loss.item():<.7f}\nMean Rec Loss:{reconstruction_loss.item():<.7f}\nMMD Loss:{mmd_loss.item()*w_prior:<.7f}\nMean Pred Loss:{prediction_loss*self.w_pred_loss:<.7f}\n"
+                            f"Epoch {(self.epochs+1):>3d}\tIter {(iter+1):>4d}\tMean Training Loss:{loss.item():<.7f}\nMean Rec Loss:{reconstruction_loss.item():<.7f}\nMMD Loss:{mmd_loss.item()*self.w_prior:<.7f}\nMean Pred Loss:{prediction_loss*self.w_pred_loss:<.7f}\n"
                         )
 
         if (self.epochs + 1) % self.print_every_n_epochs == 0:
@@ -589,24 +534,10 @@ class GTM:
                 )
                 print("\n")
 
-        if self.update_prior is True and initialization is False and validation is False:
-            all_topics = torch.cat(all_topics, dim=0).numpy()
-            all_prevalence_covariates = torch.cat(all_prevalence_covariates, dim=0).numpy()
-            if self.doc_topic_prior == "dirichlet":
-                self.prior.update_parameters(
-                    all_topics, all_prevalence_covariates
-                )
-            else:
-                self.prior.update_parameters(
-                    all_topics, all_prevalence_covariates
-                )             
-            
-            #print(self.prior.lambda_)
-
         return sum(epochloss_lst)
-
+    
     def get_doc_topic_distribution(
-        self, dataset, to_simplex=True, num_workers=None, to_numpy=True
+        self, dataset, to_simplex=True, batch_size=1, num_workers=None, to_numpy=True
     ):
         """
         Get the topic distribution of each document in the corpus.
@@ -614,6 +545,7 @@ class GTM:
         Args:
             dataset: a GTMCorpus object
             to_simplex: whether to map the topic distribution to the simplex. If False, the topic distribution is returned in the logit space.
+            batch_size: batch size for the data loaders.
             num_workers: number of workers for the data loaders.
             to_numpy: whether to return the topic distribution as a numpy array.
         """
@@ -621,12 +553,10 @@ class GTM:
         if num_workers is None: 
             num_workers = self.num_workers
 
-        self.AutoEncoder.eval()
-
         with torch.no_grad():
             data_loader = DataLoader(
                 dataset,
-                batch_size=self.batch_size,
+                batch_size=batch_size,
                 shuffle=False,
                 num_workers=num_workers,
             )
@@ -634,32 +564,26 @@ class GTM:
             for data in data_loader:
                 for key, value in data.items():
                     data[key] = value.to(self.device)
-                bows = data.get("M_bow", None)
-                bows = bows.reshape(bows.shape[0], -1)
-                embeddings = data.get("M_embeddings", None)
+                bows_combined = data.get("M_bow_combined", None)
+                bows_combined = bows_combined.reshape(bows_combined.shape[0], -1)
                 prevalence_covariates = data.get("M_prevalence_covariates", None)
-                content_covariates = data.get("M_content_covariates", None)
-                if self.encoder_input == "bow":
-                    x_input = bows
-                elif self.encoder_input == "embeddings":
-                    x_input = embeddings
-                if self.encoder_include_prevalence_covariates:
-                    _, thetas, z = self.AutoEncoder(
-                        x_input,
-                        prevalence_covariates,
-                        content_covariates
-                    )
+                if prevalence_covariates is not None:
+                    prevalence_covariates = prevalence_covariates
+
+                # Get theta
+                if prevalence_covariates is not None and self.encoder_args["encoder_include_prevalence_covariates"]:
+                    x_input = torch.cat((bows_combined, prevalence_covariates), 1)
                 else:
-                    prevalence_covariates_bis = None
-                    _, thetas, z = self.AutoEncoder(
-                        x_input,
-                        prevalence_covariates_bis,
-                        content_covariates
-                    )
+                    x_input = bows_combined
+
+                z = self.Encoder(x_input)
                 if to_simplex:
-                    final_thetas.append(thetas)
+                    thetas = F.softmax(z, dim=1)
                 else:
-                    final_thetas.append(z)
+                    thetas = z
+
+                final_thetas.append(thetas)
+
             if to_numpy:
                 final_thetas = [tensor.cpu().numpy() for tensor in final_thetas]
                 final_thetas = np.concatenate(final_thetas, axis=0)
@@ -667,14 +591,15 @@ class GTM:
                 final_thetas = torch.cat(final_thetas, dim=0)
 
         return final_thetas
-
-    def get_predictions(self, dataset, to_simplex=True, num_workers=None, to_numpy=True):
+    
+    def get_predictions(self, dataset, to_simplex=True, batch_size=1, num_workers=None, to_numpy=True):
         """
         Predict the labels of the documents in the corpus based on topic proportions.
 
         Args:
             dataset: a GTMCorpus object
             to_simplex: whether to map the topic distribution to the simplex. If False, the topic distribution is returned in the logit space.
+            batch_size: batch size for the data loaders.
             num_workers: number of workers for the data loaders.
             to_numpy: whether to return the predictions as a numpy array.
         """
@@ -682,13 +607,10 @@ class GTM:
         if num_workers is None: 
             num_workers = self.num_workers
 
-        self.AutoEncoder.eval()
-        self.predictor.eval()
-
         with torch.no_grad():
             data_loader = DataLoader(
                 dataset,
-                batch_size=self.batch_size,
+                batch_size=batch_size,
                 shuffle=False,
                 num_workers=num_workers,
             )
@@ -696,44 +618,43 @@ class GTM:
             for data in data_loader:
                 for key, value in data.items():
                     data[key] = value.to(self.device)
-                bows = data.get("M_bow", None)
-                bows = bows.reshape(bows.shape[0], -1)
-                embeddings = data.get("M_embeddings", None)
+                bows_combined = data.get("M_bow_combined", None)
+                bows_combined = bows_combined.reshape(bows_combined.shape[0], -1)
                 prevalence_covariates = data.get("M_prevalence_covariates", None)
-                content_covariates = data.get("M_content_covariates", None)
                 prediction_covariates = data.get("M_prediction", None)
-                if self.encoder_input == "bow":
-                    x_input = bows
-                elif self.encoder_input == "embeddings":
-                    x_input = embeddings
-                if self.encoder_include_prevalence_covariates:
-                    _, thetas, z = self.AutoEncoder(
-                        x_input,
-                        prevalence_covariates,
-                        content_covariates,
-                    )
+                if prevalence_covariates is not None:
+                    prevalence_covariates = prevalence_covariates
+                if prediction_covariates is not None:
+                    prediction_covariates = prediction_covariates
+
+                # Get theta
+                if prevalence_covariates is not None and self.encoder_args["encoder_include_prevalence_covariates"]:
+                    x_input = torch.cat((bows_combined, prevalence_covariates), 1)
                 else:
-                    prevalence_covariates_bis = None
-                    _, thetas, z = self.AutoEncoder(
-                        x_input,
-                        prevalence_covariates_bis,
-                        content_covariates,
-                    )
+                    x_input = bows_combined
+
+                z = self.Encoder(x_input)
+                if to_simplex:
+                    thetas = F.softmax(z, dim=1)
+                else:
+                    thetas = z
+
+                # Get predictions
                 predictions = self.predictor(thetas, prediction_covariates)
                 if self.predictor_type == "classifier":
                     predictions = torch.softmax(predictions, dim=1)
+
                 final_predictions.append(predictions)
+
             if to_numpy:
-                final_predictions = [
-                    tensor.cpu().numpy() for tensor in final_predictions
-                ]
+                final_predictions = [tensor.cpu().numpy() for tensor in final_predictions]
                 final_predictions = np.concatenate(final_predictions, axis=0)
             else:
                 final_predictions = torch.cat(final_predictions, dim=0)
 
         return final_predictions
-
-    def get_topic_words(self, l_content_covariates=[], topK=8):
+    
+    def get_topic_words(self, l_content_covariates=[], lang=None, topK=8):
         """
         Get the top words per topic, potentially influenced by content covariates.
 
@@ -741,7 +662,11 @@ class GTM:
             l_content_covariates: list with the names of the content covariates to influence the topic-word distribution.
             topK: number of top words to return per topic.
         """
-        self.AutoEncoder.eval()
+
+        if lang is None: 
+            lang = self.ref_lang
+
+        self.Decoders[lang].eval()
         with torch.no_grad():
             topic_words = {}
             idxes = torch.eye(self.n_topics + self.content_covariate_size).to(
@@ -750,18 +675,18 @@ class GTM:
             for k in l_content_covariates:
                 idx = [i for i, l in enumerate(self.content_colnames) if l == k][0]
                 idxes[:, (self.n_topics + idx)] += 1
-            word_dist = self.AutoEncoder.decode(idxes)
+            word_dist = self.Decoders[lang](idxes)
             word_dist = F.softmax(word_dist, dim=1)
             _, indices = torch.topk(word_dist, topK, dim=1)
             indices = indices.cpu().tolist()
             for topic_id in range(self.n_topics):
                 topic_words["Topic_{}".format(topic_id)] = [
-                    self.id2token[idx] for idx in indices[topic_id]
+                    self.id2token[lang][idx] for idx in indices[topic_id]
                 ]
 
         return topic_words
 
-    def get_covariate_words(self, topK=8):
+    def get_covariate_words(self, lang=None, topK=8):
         """
         Get the top words associated to a specific content covariate.
 
@@ -769,13 +694,16 @@ class GTM:
             topK: number of top words to return per content covariate.
         """
 
-        self.AutoEncoder.eval()
+        if lang is None: 
+            lang = self.ref_lang
+
+        self.Decoders[lang].eval()
         with torch.no_grad():
             covariate_words = {}
             idxes = torch.eye(self.n_topics + self.content_covariate_size).to(
                 self.device
             )
-            word_dist = self.AutoEncoder.decode(idxes)
+            word_dist = self.Decoders[lang](idxes)
             word_dist = F.softmax(word_dist, dim=1)
             vals, indices = torch.topk(word_dist, topK, dim=1)
             vals = vals.cpu().tolist()
@@ -784,10 +712,10 @@ class GTM:
                 if i >= self.n_topics:
                     covariate_words[
                         "{}".format(self.content_colnames[i - self.n_topics])
-                    ] = [self.id2token[idx] for idx in indices[i]]
+                    ] = [self.id2token[lang][idx] for idx in indices[i]]
         return covariate_words
 
-    def get_topic_word_distribution(self, l_content_covariates=[], to_numpy=True):
+    def get_topic_word_distribution(self, l_content_covariates=[], lang=None, to_numpy=True):
         """
         Get the topic-word distribution of each topic, potentially influenced by covariates.
 
@@ -795,7 +723,11 @@ class GTM:
             l_content_covariates: list with the names of the content covariates to influence the topic-word distribution.
             to_numpy: whether to return the topic-word distribution as a numpy array.
         """
-        self.AutoEncoder.eval()
+
+        if lang is None:
+            lang = self.ref_lang
+
+        self.Decoders[lang].eval()
         with torch.no_grad():
             idxes = torch.eye(self.n_topics + self.content_covariate_size).to(
                 self.device
@@ -803,26 +735,30 @@ class GTM:
             for k in l_content_covariates:
                 idx = [i for i, l in enumerate(self.content_colnames) if l == k][0]
                 idxes[:, (self.n_topics + idx)] += 1
-            topic_word_distribution = self.AutoEncoder.decode(idxes)
+            topic_word_distribution = self.Decoders[lang](idxes)
             topic_word_distribution = F.softmax(topic_word_distribution, dim=1)
         if to_numpy:
             return topic_word_distribution.cpu().detach().numpy()[0 : self.n_topics, :]
         else:
             return topic_word_distribution[0 : self.n_topics, :]
 
-    def get_covariate_word_distribution(self, to_numpy=True):
+    def get_covariate_word_distribution(self, lang=None, to_numpy=True):
         """
         Get the covariate-word distribution of each topic.
 
         Args:
             to_numpy: whether to return the covariate-word distribution as a numpy array.
         """
-        self.AutoEncoder.eval()
+        
+        if lang is None:
+            lang = self.ref_lang
+
+        self.Decoders[lang].eval()
         with torch.no_grad():
             idxes = torch.eye(self.n_topics + self.content_covariate_size).to(
                 self.device
             )
-            topic_word_distribution = self.AutoEncoder.decode(idxes)
+            topic_word_distribution = self.Decoders[lang](idxes)
             topic_word_distribution = F.softmax(topic_word_distribution, dim=1)
         if to_numpy:
             return topic_word_distribution.cpu().detach().numpy()[self.n_topics :, :]
@@ -1178,7 +1114,7 @@ class GTM:
         if output_path is not None:
             fig.write_html(output_path, config=dict(editable=True))
 
-    def estimate_effect(self, dataset, to_simplex = True, n_samples=20, topic_ids=None, progress_bar=True):
+    def estimate_effect(self, dataset, n_samples=20, topic_ids=None, progress_bar=True):
         """
         GLM estimates and associated standard errors of the doc-topic prior conditional on the prevalence covariates.
 
@@ -1187,7 +1123,7 @@ class GTM:
         run a regression topic_proportion ~ covariates, then repeat for n_samples.  
         Quantities of interest are the mean and the standard deviation of regression coefficients across samples.
 
-        /!\ May take quite some time to run. /!\
+        ! May take quite some time to run. !
 
         References:
         - Roberts, M. E., Stewart, B. M., & Airoldi, E. M. (2016). A model of text for experimentation in the social sciences. Journal of the American Statistical Association, 111(515), 988-1003.
@@ -1208,16 +1144,13 @@ class GTM:
         dict_of_params = {"Topic_{}".format(k): [] for k in range(self.n_topics)}
         OLS_model = LinearRegression(fit_intercept=False)
         for i in samples_iterator:
-            if self.doc_topic_prior == "dirichlet":
-                Y = self.prior.sample(X.shape[0], X).cpu().numpy()
-            else:
-                Y = self.prior.sample(X.shape[0], X, to_simplex).cpu().numpy()
+            Y = self.prior.sample(X.shape[0], X).cpu().numpy()
             for k in iterator:
                 OLS_model.fit(
                     X[
                         :,
                     ],
-                    Y[:, k],
+                    Y[:, k] * 100,
                 )
                 dict_of_params["Topic_{}".format(k)].append(np.array([OLS_model.coef_]))
 
@@ -1229,7 +1162,7 @@ class GTM:
             mean = np.mean(a, axis=0)
             sd = np.std(a, axis=0)
             for i, cov in enumerate(dataset.prevalence_colnames):
-                d = {}  
+                d = {}
                 d["topic"] = k
                 d["covariate"] = cov
                 d["mean"] = mean[i]
@@ -1240,28 +1173,11 @@ class GTM:
 
         return df
 
-    def get_ldavis_data_format(self, dataset):
-        """
-        Returns a data format that can be used in input to pyldavis to interpret the topics.
-        """
-        term_frequency = np.ravel(dataset.M_bow.sum(axis=0))
-        doc_lengths = np.ravel(dataset.M_bow.sum(axis=1))
-        vocab = self.id2token
-        term_topic = self.get_topic_word_distribution()
-        doc_topic_distribution = self.get_doc_topic_distribution(dataset)
-
-        data = {
-            "topic_term_dists": term_topic,
-            "doc_topic_dists": doc_topic_distribution,
-            "doc_lengths": doc_lengths,
-            "vocab": vocab,
-            "term_frequency": term_frequency,
-        }
-
-        return data
-
     def save_model(self, save_name):
-        autoencoder_state_dict = self.AutoEncoder.state_dict()
+        encoder_state_dict = self.Encoder.state_dict()
+        decoders = {}
+        for lang in self.languages:
+            decoders[lang] = self.Decoders[lang].state_dict()
         if self.labels_size != 0:
             predictor_state_dict = self.predictor.state_dict()
         else:
@@ -1272,10 +1188,11 @@ class GTM:
 
         checkpoint = {}
         for key, value in all_vars.items():
-            if key not in ["AutoEncoder", "predictor", "optimizer"]:
+            if key not in ["Encoder", "Decoders", "predictor", "optimizer"]:
                 checkpoint[key] = value
 
-        checkpoint["AutoEncoder"] = autoencoder_state_dict
+        checkpoint["Encoder"] = encoder_state_dict
+        checkpoint["Decoders"] = decoders
         if self.labels_size != 0:
             checkpoint["predictor"] = predictor_state_dict
         checkpoint["optimizer"] = optimizer_state_dict
@@ -1288,63 +1205,81 @@ class GTM:
         """
         ckpt = torch.load(ckpt)
         for key, value in ckpt.items():
-            if key not in ["AutoEncoder", "predictor", "optimizer"]:
+            if key not in ["Encoder", "Decoders", "predictor", "optimizer"]:
                 setattr(self, key, value)
 
-        if not hasattr(self, "AutoEncoder"):
-            if self.encoder_include_prevalence_covariates:
-                encoder_dims = [self.input_size + self.prevalence_covariate_size]
-            else:
-                encoder_dims = [self.input_size]
-            encoder_dims.extend(self.encoder_hidden_layers)
-            encoder_dims.extend([self.n_topics])
-
-            decoder_dims = [self.n_topics + self.content_covariate_size]
-            decoder_dims.extend(self.decoder_hidden_layers)
-            decoder_dims.extend([self.bow_size])
-
-            self.AutoEncoder = AutoEncoderMLP(
-                encoder_dims=encoder_dims,
-                encoder_non_linear_activation=self.encoder_non_linear_activation,
-                encoder_bias=self.encoder_bias,
-                decoder_dims=decoder_dims,
-                decoder_non_linear_activation=self.decoder_non_linear_activation,
-                decoder_bias=self.decoder_bias,
+        if not hasattr(self, "Encoder"):
+            self.Encoder = EncoderMLP(
+                encoder_dims=[self.bow_size + self.prevalence_covariate_size],
+                encoder_non_linear_activation=self.encoder_args['encoder_non_linear_activation'],
+                predictor_bias=self.encoder_args['encoder_bias'],
                 dropout=self.dropout,
             ).to(self.device)
+        self.Encoder.load_state_dict(ckpt["Encoder"])
 
-        self.AutoEncoder.load_state_dict(ckpt["AutoEncoder"])
+        if not hasattr(self, "Decoders"):
+
+            self.Decoders = {}
+
+            for lang in self.languages:
+
+                decoder_hidden_layers = self.decoder_args[lang]['decoder_hidden_layers']
+                decoder_non_linear_activation = self.decoder_args[lang]['decoder_non_linear_activation']
+                decoder_bias = self.decoder_args[lang]['decoder_bias']
+
+                decoder_dims = [self.n_topics + self.content_covariate_size]
+                decoder_dims.extend(decoder_hidden_layers)
+                decoder_dims.extend([self.bow_size])
+
+                self.Decoders[lang] = DecoderMLP(
+                    decoder_dims=decoder_dims,
+                    decoder_non_linear_activation=decoder_non_linear_activation,
+                    decoder_bias=decoder_bias,
+                    dropout=self.dropout,
+                ).to(self.device)
+
+                self.Decoders[lang].load_state_dict(ckpt["Decoders"][lang])
 
         if self.labels_size != 0:
             if not hasattr(self, "predictor"):
                 self.predictor = Predictor(
                     predictor_dims=[self.n_topics + self.prediction_covariate_size]
-                    + self.predictor_hidden_layers
+                    + self.predictor_args['predictor_hidden_layers']
                     + [self.labels_size],
-                    predictor_non_linear_activation=self.predictor_non_linear_activation,
-                    predictor_bias=self.predictor_bias,
+                    predictor_non_linear_activation=self.predictor_args['predictor_non_linear_activation'],
+                    predictor_bias=self.predictor_args['predictor_bias'],
                     dropout=self.dropout,
                 ).to(self.device)
             self.predictor.load_state_dict(ckpt["predictor"])
 
         if not hasattr(self, "optimizer"):
-            if self.labels_size != 0:
+
+            list_of_decoder_parameters = []
+            for lang in self.languages:
+                list_of_decoder_parameters += list(self.Decoders[lang].parameters())
+
+            if self.labels_size != 0: 
+                list_of_predictor_parameters = list(self.predictor.parameters())
+                list_of_encoder_parameters = list(self.Encoder.parameters())
                 self.optimizer = torch.optim.Adam(
-                    list(self.AutoEncoder.parameters())
-                    + list(self.predictor.parameters()),
+                    list_of_encoder_parameters + list_of_decoder_parameters + list_of_predictor_parameters,
                     lr=self.learning_rate,
                 )
             else:
                 self.optimizer = torch.optim.Adam(
-                    self.AutoEncoder.parameters(), lr=self.learning_rate
+                    list_of_encoder_parameters + list_of_decoder_parameters, 
+                    lr=self.learning_rate
                 )
-        self.optimizer.load_state_dict(ckpt["optimizer"])
+
+            self.optimizer.load_state_dict(ckpt["optimizer"])
 
     def to(self, device):
         """
         Move the model to a different device.
         """
-        self.AutoEncoder.to(device)
+        self.Encoder.to(device)
+        for lang in self.languages:
+            self.Decoders[lang].to(device)
         self.prior.to(device)
         if self.labels_size != 0:
             self.predictor.to(device)

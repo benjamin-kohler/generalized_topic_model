@@ -192,69 +192,65 @@ def compute_mmd_loss(x, y, device, kernel = 'multiscale'):
     Args:
         x: first sample, distribution P
         y: second sample, distribution Q
-        kernel: kernel type such as "multiscale" or "rbf"
+        kernel: kernel type such as "multiscale" or "diffusion"
     """
-    xx, yy, zz = torch.mm(x, x.t()), torch.mm(y, y.t()), torch.mm(x, y.t())
-    rx = (xx.diag().unsqueeze(0).expand_as(xx))
-    ry = (yy.diag().unsqueeze(0).expand_as(yy))
-    
-    dxx = rx.t() + rx - 2. * xx # Used for A in (1)
-    dyy = ry.t() + ry - 2. * yy # Used for B in (1)
-    dxy = rx.t() + ry - 2. * zz # Used for C in (1)
-    
-    XX, YY, XY = (torch.zeros(xx.shape).to(device),
-                  torch.zeros(xx.shape).to(device),
-                  torch.zeros(xx.shape).to(device))
-    
+
     if kernel == "multiscale":
 
-        #bandwidth_range = [0.2, 0.5, 0.7, 1, 1.3]
-        bandwidth_range = [0.1,0.2,0.3,0.4,0.5,0.6,0.7,0.8,0.9,1]
+        xx, yy, zz = torch.mm(x, x.t()), torch.mm(y, y.t()), torch.mm(x, y.t())
+        rx = (xx.diag().unsqueeze(0).expand_as(xx))
+        ry = (yy.diag().unsqueeze(0).expand_as(yy))
+        
+        dxx = rx.t() + rx - 2. * xx # Used for A in (1)
+        dyy = ry.t() + ry - 2. * yy # Used for B in (1)
+        dxy = rx.t() + ry - 2. * zz # Used for C in (1)
+        
+        XX, YY, XY = (torch.zeros(xx.shape).to(device),
+                    torch.zeros(xx.shape).to(device),
+                    torch.zeros(xx.shape).to(device))
+
+        bandwidth_range = [0.01, 0.1, 0.3, 0.5, 0.7, 1]
         for a in bandwidth_range:
             XX += a**2 * (a**2 + dxx)**-1
             YY += a**2 * (a**2 + dyy)**-1
             XY += a**2 * (a**2 + dxy)**-1
+        
+        mmd_loss = torch.mean(XX + YY - 2. * XY)
             
-    if kernel == "rbf":
+    if kernel == "diffusion":
 
-        bandwidth_range = [10, 15, 20, 50]
-        #bandwidth_range = [10, 15, 20, 50]
-        for a in bandwidth_range:
-            XX += torch.exp(-0.5*dxx/a)
-            YY += torch.exp(-0.5*dyy/a)
-            XY += torch.exp(-0.5*dxy/a)
+        eps=1e-6
+        n, d = x.shape
+        t_values = [0.05,0.1,0.2]
+        
+        qx = torch.sqrt(torch.clamp(x, eps, 1))
+        qy = torch.sqrt(torch.clamp(y, eps, 1))
+        
+        xx = torch.matmul(qx, qx.t())
+        yy = torch.matmul(qy, qy.t())
+        xy = torch.matmul(qx, qy.t())
+        
+        off_diag = 1 - torch.eye(n).to(device)
+        
+        def diffusion_kernel(a, tmpt, dim):
+            return torch.exp(-torch.acos(torch.clamp(a, 0, 1 - eps)).pow(2)) / tmpt
 
-    return torch.mean(XX + YY - 2. * XY)
-
-
-def compute_mmd_loss(x, y, device, t=0.1, kernel="diffusion"):
-    """
-    Computes the MMD loss with information diffusion kernel.
-
-    Reference:
-        - https://github.com/zll17/Neural_Topic_Models
-    """
-    eps = 1e-6
-    n, d = x.shape
-    
-    qx = torch.sqrt(torch.clamp(x, eps, 1))
-    qy = torch.sqrt(torch.clamp(y, eps, 1))
-    xx = torch.matmul(qx, qx.t())
-    yy = torch.matmul(qy, qy.t())
-    xy = torch.matmul(qx, qy.t())
-
-    def diffusion_kernel(a, tmpt, dim):
-        return torch.exp(-torch.acos(a).pow(2)) / tmpt
-
-    off_diag = 1 - torch.eye(n).to(device)
-    k_xx = diffusion_kernel(torch.clamp(xx, 0, 1 - eps), t, d - 1)
-    k_yy = diffusion_kernel(torch.clamp(yy, 0, 1 - eps), t, d - 1)
-    k_xy = diffusion_kernel(torch.clamp(xy, 0, 1 - eps), t, d - 1)
-    sum_xx = (k_xx * off_diag).sum() / (n * (n - 1))
-    sum_yy = (k_yy * off_diag).sum() / (n * (n - 1))
-    sum_xy = 2 * k_xy.sum() / (n * n)
-
-    mmd_loss = sum_xx + sum_yy - sum_xy
+        sum_xx_total, sum_yy_total, sum_xy_total = 0, 0, 0
+        
+        for t in t_values:
+            k_xx = diffusion_kernel(xx, t, d - 1)
+            k_yy = diffusion_kernel(yy, t, d - 1)
+            k_xy = diffusion_kernel(xy, t, d - 1)
+            
+            sum_xx = (k_xx * off_diag).sum() / (n * (n - 1))
+            sum_yy = (k_yy * off_diag).sum() / (n * (n - 1))
+            sum_xy = 2 * k_xy.sum() / (n * n)
+            
+            sum_xx_total += sum_xx
+            sum_yy_total += sum_yy
+            sum_xy_total += sum_xy
+        
+        mmd_loss = (sum_xx_total + sum_yy_total - sum_xy_total) / len(t_values)
 
     return mmd_loss
 

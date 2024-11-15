@@ -14,7 +14,6 @@ class GTMOptimizer:
 
     /!\ 
     NB: There are many possible hyperparameters to be optimized in the GTM. This can make the grid quickly intractable. 
-    It is recommended to keep default hyperparameters for the GTM and only optimize the number of topics.
     /!\
     """
 
@@ -29,11 +28,13 @@ class GTMOptimizer:
         encoder_hidden_layers=[[1024,512]],
         encoder_non_linear_activation=["relu"],
         encoder_biases=[True],
-        decoder_hidden_layers=[[1024,512]],
+        decoder_hidden_layers=[[512,1024]],
         decoder_non_linear_activation=["relu"],
         decoder_biases=[True],
         predictor_hidden_layers=[[]],
         predictor_non_linear_activation=["relu"],
+        w_priors=[10],
+        w_pred_losses=[1],
         gtm_model_args={
             "print_every_n_epochs": 1000000,
             "print_every_n_batches": 1000000,
@@ -58,6 +59,8 @@ class GTMOptimizer:
             decoder_non_linear_activation: List of strings representing the non-linear activation functions to be tested in the decoder. Available activations: "relu", "sigmoid", None.
             predictor_hidden_layers: List of list of integers representing the number of hidden layers in the predictor.
             predictor_non_linear_activation: List of strings representing the non-linear activation functions to be tested in the predictor. Available activations: "relu", "sigmoid", None.
+            w_priors: List of floats representing the weight of the prior loss.
+            w_pred_losses: List of floats representing the weight of the prediction loss.
             gtm_model_args: Additional arguments for the GTM.
             topK: Integer representing the number of words per topic.
             save_folder: String representing the folder where to save the GTM models.
@@ -77,6 +80,8 @@ class GTMOptimizer:
         self.decoder_biases = decoder_biases
         self.predictor_hidden_layers = predictor_hidden_layers
         self.predictor_non_linear_activation = predictor_non_linear_activation
+        self.w_priors = w_priors
+        self.w_pred_losses = w_pred_losses
         self.grid = None
         self.gtm_model_args = gtm_model_args
         self.topK = topK
@@ -129,6 +134,8 @@ class GTMOptimizer:
             decoder_bias,
             predictor_hidden_layer,
             predictor_non_linear_activation,
+            w_prior,  
+            w_pred_loss  
         ) in product(
             self.n_topics,
             self.doc_topic_priors,
@@ -142,6 +149,8 @@ class GTMOptimizer:
             self.decoder_biases,
             self.predictor_hidden_layers,
             self.predictor_non_linear_activation,
+            self.w_priors,  
+            self.w_pred_losses 
         ):
             for _ in range(self.n_samples):
                 seed = _
@@ -158,7 +167,10 @@ class GTMOptimizer:
                     "decoder_bias": decoder_bias,
                     "predictor_hidden_layers": predictor_hidden_layer,
                     "predictor_non_linear_activation": predictor_non_linear_activation,
+                    "w_prior": w_prior,  
+                    "w_pred_loss": w_pred_loss  
                 }
+
                 gtm = GTM(
                     train_data=train_dataset,
                     test_data=test_dataset,
@@ -169,9 +181,10 @@ class GTMOptimizer:
                 gtm.save_model(
                     os.path.join(
                         self.save_folder,
-                        f"gtm_{n_topics}_{doc_topic_prior}_{alpha}_{encoder_input}_{encoder_hidden_layer}_{encoder_non_linear_activation}_{encoder_bias}_{decoder_hidden_layer}_{decoder_non_linear_activation}_{decoder_bias}_{predictor_hidden_layer}_{predictor_non_linear_activation}_seed_{seed}.ckpt",
+                        f"gtm_{n_topics}_{doc_topic_prior}_{alpha}_{encoder_input}_{encoder_hidden_layer}_{encoder_non_linear_activation}_{encoder_bias}_{decoder_hidden_layer}_{decoder_non_linear_activation}_{decoder_bias}_{predictor_hidden_layer}_{predictor_non_linear_activation}_w_prior_{w_prior}_w_pred_loss_{w_pred_loss}_seed_{seed}.ckpt",
                     )
-                )
+                )       
+
                 result = {
                     "n_topics": n_topics,
                     "doc_topic_prior": doc_topic_prior,
@@ -185,6 +198,8 @@ class GTMOptimizer:
                     "decoder_bias": decoder_bias,
                     "predictor_hidden_layer": predictor_hidden_layer,
                     "predictor_non_linear_activation": predictor_non_linear_activation,
+                    "w_prior":w_prior,
+                    "w_pred_loss":w_pred_loss,
                     "seed": seed,
                     "config_id": i,
                 }
@@ -277,10 +292,10 @@ class GTMOptimizer:
         plt.xlabel("Configuration ID")
         plt.ylabel(metric_uppercase)
         plt.grid(True)
-        if display:
-            plt.show()
         if output_path:
             plt.savefig(output_path)
+        if display:
+            plt.show()
 
     def get_best_model(self, metric="coherence"):
         """
@@ -299,7 +314,7 @@ class GTMOptimizer:
         gtm = GTM(
             ckpt=os.path.join(
                 self.save_folder,
-                f"gtm_{best_model_params['n_topics']}_{best_model_params['doc_topic_prior']}_{best_model_params['alpha']}_{best_model_params['encoder_input']}_{best_model_params['encoder_hidden_layer']}_{best_model_params['encoder_non_linear_activation']}_{best_model_params['encoder_bias']}_{best_model_params['decoder_hidden_layer']}_{best_model_params['decoder_non_linear_activation']}_{best_model_params['decoder_bias']}_{best_model_params['predictor_hidden_layer']}_{best_model_params['predictor_non_linear_activation']}_seed_{best_model_params['seed']}.ckpt",
+                f"gtm_{best_model_params['n_topics']}_{best_model_params['doc_topic_prior']}_{best_model_params['alpha']}_{best_model_params['encoder_input']}_{best_model_params['encoder_hidden_layer']}_{best_model_params['encoder_non_linear_activation']}_{best_model_params['encoder_bias']}_{best_model_params['decoder_hidden_layer']}_{best_model_params['decoder_non_linear_activation']}_{best_model_params['decoder_bias']}_{best_model_params['predictor_hidden_layer']}_{best_model_params['predictor_non_linear_activation']}_w_prior_{best_model_params['w_prior']}_w_pred_loss_{best_model_params['w_pred_loss']}_seed_{best_model_params['seed']}.ckpt",
             )
         )
         return best_model_params, gtm

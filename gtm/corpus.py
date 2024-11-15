@@ -7,50 +7,54 @@ from patsy import dmatrix
 import numpy as np
 from sklearn.feature_extraction.text import CountVectorizer
 import scipy
-from gensim.models.doc2vec import Doc2Vec, TaggedDocument
 from utils import bert_embeddings_from_list
-
+from typing import Optional, Dict, Any
+import pandas as pd
 
 class GTMCorpus(Dataset):
     """
     Corpus for the GTM model.
     """
-
     def __init__(
         self,
-        df,
-        prevalence=None,
-        content=None,
-        prediction=None,
-        labels=None,
-        embeddings_type=None,
-        normalize_doc_length=False,
-        vectorizer=None,
-        vectorizer_args={},
-        sbert_model_to_load=None,
-        batch_size=64,
-        max_seq_length=100000,
-        doc2vec_args={},
-        device=None,
+        df: pd.DataFrame,
+        prevalence: Optional[str] = None,
+        content: Optional[str] = None,
+        prediction: Optional[str] = None,
+        labels: Optional[str] = None,
+        normalize_doc_length: bool = False,
+        vectorizer: Optional[CountVectorizer] = None,
+        vectorizer_args: Dict[str, Any] = {},
+        sbert_model_to_load: Optional[str] = None,
+        batch_size: int = 64,
+        max_seq_length: int = 100000,
+        device: Optional[str] = None,
     ):
         """
         Initialize GTMCorpus.
 
         Args:
-            df : pandas DataFrame. Must contain a column 'doc' with the text of each document. If count_words=True, it must also contain 'doc_clean' with the cleaned text of each document.
-            prevalence : string, formula for prevalence covariates (of the form "~ cov1 + cov2 + ..."), but allows for transformations of e.g., "~ g(cov1) + h(cov2) + ...)". Use "C(your_categorical_variable)" to indicate a categorical variable. See the Patsy package for more details.
-            content : string, formula for content covariates (of the form "~ cov1 + cov2 + ..."). Use "C(your_categorical_variable)" to indicate a categorical variable. See the Patsy package for more details.
-            prediction : string, formula for covariates used as inputs for the prediction task (also of the form "~ cov1 + cov2 + ..."). See the Patsy package for more details.
-            labels : string, formula for labels used as outcomes for the prediction task (of the form "~ label1 + label2 + ...")
-            embeddings_type : (optional) string, type of embeddings to use. Can be 'Doc2Vec' or 'SentenceTranformer'
-            normalize_doc_length : boolean, whether to normalize the document-term matrix by document length (to accomodate for varying document lengths)
-            vectorizer : sklearn CountVectorizer object, if None, a new one will be created
-            vectorizer_args: dict, arguments for the CountVectorizer object
-            sbert_model_to_load : string, name of the SentenceTranformer model to load
-            batch_size : int, batch size for SentenceTranformer embeddings
-            max_seq_length : int, maximum sequence length for SentenceTranformer embeddings
-            doc2vec_args : dict, arguments for the Doc2Vec object
-            device : string, device to use for SentenceTranformer embeddings
+            df (pd.DataFrame): Must contain a column 'doc' with the text of each document. 
+                If count_words=True, it must also contain 'doc_clean' with the cleaned text of each document.
+            prevalence (Optional[str]): Formula for prevalence covariates (of the form "~ cov1 + cov2 + ..."),
+                but allows for transformations of e.g., "~ g(cov1) + h(cov2) + ...)". 
+                Use "C(your_categorical_variable)" to indicate a categorical variable. 
+                See the Patsy package for more details.
+            content (Optional[str]): Formula for content covariates (of the form "~ cov1 + cov2 + ..."). 
+                Use "C(your_categorical_variable)" to indicate a categorical variable. 
+                See the Patsy package for more details.
+            prediction (Optional[str]): Formula for covariates used as inputs for the prediction task 
+                (also of the form "~ cov1 + cov2 + ..."). See the Patsy package for more details.
+            labels (Optional[str]): Formula for labels used as outcomes for the prediction task 
+                (of the form "~ label1 + label2 + ...")
+            normalize_doc_length (bool): Whether to normalize the document-term matrix by document length 
+                (to accommodate for varying document lengths)
+            vectorizer (Optional[CountVectorizer]): If None, a new one will be created
+            vectorizer_args (Dict[str, Any]): Arguments for the CountVectorizer object
+            sbert_model_to_load (Optional[str]): Name of the SentenceTransformer model to load
+            batch_size (int): Batch size for SentenceTransformer embeddings
+            max_seq_length (int): Maximum sequence length for SentenceTransformer embeddings
+            device (Optional[str]): Device to use for SentenceTransformer embeddings
         """
 
         # Basic params and formulas
@@ -58,14 +62,12 @@ class GTMCorpus(Dataset):
         self.content = content
         self.prediction = prediction
         self.labels = labels
-        self.embeddings_type = embeddings_type
         self.count_vectorizer_args = vectorizer_args
         self.normalize_doc_length = normalize_doc_length
         self.vectorizer = vectorizer
         self.sbert_model_to_load = sbert_model_to_load
         self.batch_size = batch_size
         self.max_seq_length = max_seq_length
-        self.doc2vec_args = doc2vec_args
         self.df = df
         self.device = device
 
@@ -82,33 +84,13 @@ class GTMCorpus(Dataset):
         self.id2token = {
             k: v for k, v in zip(range(0, len(self.vocab)), self.vocab)
         }
-        self.log_word_frequencies = torch.FloatTensor(
-            np.log(np.array(self.M_bow.sum(axis=0)).flatten())
-        )
 
         # Create embeddings matrix
         self.M_embeddings = None
-        self.V_embeddings = None
 
-        if embeddings_type == "Doc2Vec":
-            clean_docs = [doc.split() for doc in df["doc_clean"]]
-            tagged_documents = [
-                TaggedDocument(doc, [i]) for i, doc in enumerate(clean_docs)
-            ]
-            self.Doc2Vec_model = Doc2Vec(tagged_documents, **doc2vec_args)
-            self.M_embeddings = np.array(
-                [self.Doc2Vec_model.infer_vector(doc) for doc in clean_docs]
-            )
-            self.V_embeddings = np.array(
-                [self.Doc2Vec_model.infer_vector([token]) for token in self.vocab]
-            )
-
-        if embeddings_type == "SentenceTransformer":
+        if sbert_model_to_load is not None:
             self.M_embeddings = bert_embeddings_from_list(
                 df["doc"], sbert_model_to_load, batch_size, max_seq_length, device
-            )
-            self.V_embeddings = bert_embeddings_from_list(
-                self.vocab, sbert_model_to_load, batch_size, max_seq_length, device
             )
 
         # Extract prevalence covariates matrix
@@ -127,6 +109,7 @@ class GTMCorpus(Dataset):
                 content
             )
         else:
+            self.content_colnames = None
             self.M_content_covariates = None
 
         # Extract prediction covariates matrix

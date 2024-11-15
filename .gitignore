@@ -1,4 +1,3 @@
-data/*
 venv/*
 ckpt/*
 gtm/__pycache__/*
