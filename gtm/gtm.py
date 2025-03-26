@@ -27,6 +27,7 @@ import numpy as np
 import torch.multiprocessing as mp
 from typing import Optional, List, Dict, Union
 from corpus import GTMCorpus
+from torch.serialization import add_safe_globals
 
 class GTM:
     """
@@ -123,6 +124,7 @@ class GTM:
         """
 
         if ckpt:
+            self.set_device(device)
             self.load_model(ckpt)
         else:
             self.n_topics = n_topics
@@ -179,13 +181,7 @@ class GTM:
                 torch.backends.cudnn.deterministic = True
                 np.random.seed(seed)
 
-            if device is None:
-                if torch.cuda.is_available():
-                    self.device = torch.device("cuda")
-                elif torch.backends.mps.is_available():
-                    self.device = torch.device("mps")
-                else:
-                    self.device = torch.device("cpu")
+            self.set_device(device)
 
             bow_size = train_data.M_bow.shape[1]
             self.bow_size = bow_size
@@ -284,6 +280,18 @@ class GTM:
                 self.initialize(train_data, test_data)
 
             self.train(train_data, test_data)
+
+    def set_device(self, device):
+        if device is None:
+            if torch.cuda.is_available():
+                self.device = torch.device("cuda")
+            elif torch.backends.mps.is_available():
+                self.device = torch.device("mps")
+            else:
+                self.device = torch.device("cpu")
+        else:
+            self.device = device
+
 
     def initialize(self, train_data, test_data=None):
         """
@@ -1187,7 +1195,7 @@ class GTM:
         run a regression topic_proportion ~ covariates, then repeat for n_samples.  
         Quantities of interest are the mean and the standard deviation of regression coefficients across samples.
 
-        /!\ May take quite some time to run. /!\
+        /!\\ May take quite some time to run. /!\\
 
         References:
         - Roberts, M. E., Stewart, B. M., & Airoldi, E. M. (2016). A model of text for experimentation in the social sciences. Journal of the American Statistical Association, 111(515), 988-1003.
@@ -1286,10 +1294,11 @@ class GTM:
         """
         Helper function to load a GTM model.
         """
-        ckpt = torch.load(ckpt)
+        ckpt = torch.load(ckpt,weights_only=False, map_location=self.device)
         for key, value in ckpt.items():
             if key not in ["AutoEncoder", "predictor", "optimizer"]:
                 setattr(self, key, value)
+        self.set_device(None)
 
         if not hasattr(self, "AutoEncoder"):
             if self.encoder_include_prevalence_covariates:

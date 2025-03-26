@@ -2,6 +2,8 @@
 # -*- encoding: utf-8 -*-
 
 from sentence_transformers import SentenceTransformer
+from PIL import Image
+from sentence_transformers.models import CLIPModel
 from tqdm import tqdm
 import numpy as np
 import pandas as pd
@@ -15,6 +17,7 @@ import torch
 from torch.distributions.dirichlet import Dirichlet
 import gensim
 from gensim.corpora.dictionary import Dictionary
+from transformers import CLIPTokenizer
 
 def vect2gensim(vectorizer, dtmatrix):
     corpus_vect_gensim = gensim.matutils.Sparse2Corpus(dtmatrix, documents_columns=False)
@@ -158,14 +161,32 @@ class text_processor:
         return docs_clean
 
 
-def check_max_local_length(max_seq_length, texts):
-    max_local_length = np.max([len(t.split()) for t in texts])
+def check_max_local_length(max_seq_length, texts, model):
+    max_local_length = np.max([len(model.tokenizer(t, padding=False)["input_ids"]) for t in texts])
     if max_local_length > max_seq_length:
         warnings.simplefilter("always", DeprecationWarning)
         warnings.warn(
             f"the longest document in your collection has {max_local_length} words, the model instead "
             f"truncates to {max_seq_length} tokens."
         )
+        return False
+    else:
+        return True
+
+
+def truncate_texts(texts, max_seq_length, model):
+    tokens = [model.tokenizer(
+        text,
+        max_length=max_seq_length, 
+        truncation=True, 
+    ) for text in texts]
+
+    truncated_texts = [
+        model.tokenizer.decode(t["input_ids"], skip_special_tokens=True) for t in tokens
+    ]
+    
+    return truncated_texts
+
 
 
 def bert_embeddings_from_list(
@@ -174,13 +195,14 @@ def bert_embeddings_from_list(
     """
     Creates SBERT Embeddings from a list
     """
-
-    model = SentenceTransformer(sbert_model_to_load, device=device)
-
+    if "clip" in sbert_model_to_load:
+        model = SentenceTransformer(modules=[CustomCLIPModel(sbert_model_to_load)], device=device)
+    else:
+        model = SentenceTransformer(sbert_model_to_load, device=device)
+    
     if max_seq_length is not None:
         model.max_seq_length = max_seq_length
 
-    check_max_local_length(max_seq_length, texts)
 
     return np.array(model.encode(texts, show_progress_bar=True, batch_size=batch_size))
 
@@ -287,3 +309,36 @@ def topic_diversity(topic_words, topK=10):
         unique_words = unique_words.union(set(topic[:topK]))
     td = len(unique_words) / (topK * len(topic_words))
     return td
+
+
+
+class CustomCLIPModel(CLIPModel):
+    """The only difference to the default SentenceTransformer CLIPModel is that tokenization is done with truncation enabled."""
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)  
+
+        
+    def tokenize(self, texts, padding: str | bool = True) -> dict[str, torch.Tensor]:
+        images = []
+        texts_values = []
+        image_text_info = []
+
+        for idx, data in enumerate(texts):
+            if isinstance(data, Image.Image):  # An Image
+                images.append(data)
+                image_text_info.append(0)
+            else:  # A text
+                texts_values.append(data)
+                image_text_info.append(1)
+
+        encoding = {}
+        if len(texts_values):
+            # Add truncation=True here
+            encoding = self.processor.tokenizer(texts_values, return_tensors="pt", padding=padding, truncation=True)
+
+        if len(images):
+            image_features = self.processor.image_processor(images, return_tensors="pt")
+            encoding["pixel_values"] = image_features.pixel_values
+
+        encoding["image_text_info"] = image_text_info
+        return dict(encoding)
