@@ -107,7 +107,12 @@ class LogisticNormalPrior(Prior):
         """
         if self.prevalence_covariates_size == 0 or initialization:
             z_true = np.random.randn(N, self.n_topics)
-            z_true = torch.from_numpy(z_true).to(
+            if self.device=="mps":
+                z_true = torch.from_numpy(z_true).to(
+                    self.device
+                ).float()
+            else:
+                z_true = torch.from_numpy(z_true).to(
                     self.device
                 )
         else:

@@ -34,8 +34,11 @@ class AutoEncoderMLP(nn.Module):
         decoder_non_linear_activation: Optional[str] = None,
         decoder_bias: bool = False,
         dropout: float = 0.0,
+        use_batch_norm: bool = False,
+        use_layer_norm: bool = False
     ):
-        super(AutoEncoderMLP, self).__init__()
+        # super(AutoEncoderMLP, self).__init__()
+        super().__init__()
 
         self.encoder_dims = encoder_dims
         self.encoder_non_linear_activation = encoder_non_linear_activation
@@ -44,6 +47,7 @@ class AutoEncoderMLP(nn.Module):
         self.decoder_non_linear_activation = decoder_non_linear_activation
         self.decoder_bias = decoder_bias
         self.dropout = nn.Dropout(p=dropout)
+    
         
         self.encoder_nonlin: Optional[Callable] = None
         if encoder_non_linear_activation is not None:
@@ -57,23 +61,28 @@ class AutoEncoderMLP(nn.Module):
                 decoder_non_linear_activation
             ]
 
-        self.encoder = nn.ModuleDict(
-            {
-                f"enc_{i}": nn.Linear(
-                    encoder_dims[i], encoder_dims[i + 1], bias=encoder_bias
-                )
-                for i in range(len(encoder_dims) - 1)
-            }
-        )
+        self.encoder = nn.ModuleDict()
+        self.encoder_norm_layers = nn.ModuleDict()
+        for i in range(len(encoder_dims) - 1):
+            self.encoder[f"enc_{i}"] = nn.Linear(
+                encoder_dims[i], encoder_dims[i + 1], bias=encoder_bias
+            )
+            if use_batch_norm:
+                self.encoder_norm_layers[f"norm_{i}"] = nn.BatchNorm1d(encoder_dims[i + 1])
+            elif use_layer_norm:
+                self.encoder_norm_layers[f"norm_{i}"] = nn.LayerNorm(encoder_dims[i + 1])
 
-        self.decoder = nn.ModuleDict(
-            {
-                f"dec_{i}": nn.Linear(
-                    decoder_dims[i], decoder_dims[i + 1], bias=decoder_bias
-                )
-                for i in range(len(decoder_dims) - 1)
-            }
-        )
+        self.decoder = nn.ModuleDict()
+        self.decoder_norm_layers = nn.ModuleDict()
+        for i in range(len(decoder_dims) - 1):
+            self.decoder[f"dec_{i}"] = nn.Linear(
+                decoder_dims[i], decoder_dims[i + 1], bias=decoder_bias
+            )
+            if use_batch_norm:
+                self.decoder_norm_layers[f"norm_{i}"] = nn.BatchNorm1d(decoder_dims[i + 1])
+            elif use_layer_norm:
+                self.decoder_norm_layers[f"norm_{i}"] = nn.LayerNorm(decoder_dims[i + 1])
+
 
     def encode(self, x: torch.Tensor) -> torch.Tensor:
         """
@@ -87,12 +96,15 @@ class AutoEncoderMLP(nn.Module):
         """
         hid = x
         for i, (_, layer) in enumerate(self.encoder.items()):
-            hid = self.dropout(layer(hid))
+            hid = layer(hid)
+            if f"norm_{i}" in self.encoder_norm_layers:
+                hid = self.encoder_norm_layers[f"norm_{i}"](hid)
             if (
                 i < len(self.encoder) - 1
                 and self.encoder_non_linear_activation is not None
             ):
                 hid = self.encoder_nonlin(hid)
+            hid = self.dropout(hid)
         return hid
 
     def decode(self, z: torch.Tensor) -> torch.Tensor:
@@ -108,11 +120,14 @@ class AutoEncoderMLP(nn.Module):
         hid = z
         for i, (_, layer) in enumerate(self.decoder.items()):
             hid = layer(hid)
+            if f"norm_{i}" in self.decoder_norm_layers:
+                hid = self.decoder_norm_layers[f"norm_{i}"](hid)
             if (
                 i < len(self.decoder) - 1
                 and self.decoder_non_linear_activation is not None
             ):
                 hid = self.decoder_nonlin(hid)
+            hid = self.dropout(hid)
         return hid
 
     def forward(
@@ -163,6 +178,8 @@ class EncoderMLP(nn.Module):
         encoder_non_linear_activation: Optional[str] = "relu",
         encoder_bias: bool = True,
         dropout: float = 0.0,
+        use_batch_norm: bool = False,
+        use_layer_norm: bool = False,
     ):
         super(EncoderMLP, self).__init__()
 
@@ -171,20 +188,24 @@ class EncoderMLP(nn.Module):
         self.encoder_bias = encoder_bias
         self.dropout = nn.Dropout(p=dropout)
         
+        
         self.encoder_nonlin: Optional[Callable] = None
         if encoder_non_linear_activation is not None:
             self.encoder_nonlin = {"relu": F.relu, "sigmoid": torch.sigmoid}[
                 encoder_non_linear_activation
             ]
 
-        self.encoder = nn.ModuleDict(
-            {
-                f"enc_{i}": nn.Linear(
-                    encoder_dims[i], encoder_dims[i + 1], bias=encoder_bias
-                )
-                for i in range(len(encoder_dims) - 1)
-            }
-        )
+        self.encoder = nn.ModuleDict()
+        self.norm_layers = nn.ModuleDict()
+
+        for i in range(len(encoder_dims) - 1):
+            self.encoder[f"enc_{i}"] = nn.Linear(
+                encoder_dims[i], encoder_dims[i + 1], bias=encoder_bias
+            )
+            if use_batch_norm:
+                self.norm_layers[f"norm_{i}"] = nn.BatchNorm1d(encoder_dims[i + 1])
+            elif use_layer_norm:
+                self.norm_layers[f"norm_{i}"] = nn.LayerNorm(encoder_dims[i + 1])
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         """
@@ -199,6 +220,8 @@ class EncoderMLP(nn.Module):
         hid = x
         for i, (_, layer) in enumerate(self.encoder.items()):
             hid = self.dropout(layer(hid))
+            if f"norm_{i}" in self.norm_layers:
+                hid = self.norm_layers[f"norm_{i}"](hid)
             if (
                 i < len(self.encoder) - 1
                 and self.encoder_non_linear_activation is not None
@@ -225,6 +248,8 @@ class DecoderMLP(nn.Module):
         decoder_non_linear_activation: Optional[str] = None,
         decoder_bias: bool = False,
         dropout: float = 0.0,
+        use_batch_norm: bool = False,
+        use_layer_norm: bool = False,
     ):
         super(DecoderMLP, self).__init__()
 
@@ -232,21 +257,24 @@ class DecoderMLP(nn.Module):
         self.decoder_non_linear_activation = decoder_non_linear_activation
         self.decoder_bias = decoder_bias
         self.dropout = nn.Dropout(p=dropout)
-        
+
         self.decoder_nonlin: Optional[Callable] = None
         if decoder_non_linear_activation is not None:
             self.decoder_nonlin = {"relu": F.relu, "sigmoid": torch.sigmoid}[
                 decoder_non_linear_activation
             ]
 
-        self.decoder = nn.ModuleDict(
-            {
-                f"dec_{i}": nn.Linear(
-                    decoder_dims[i], decoder_dims[i + 1], bias=decoder_bias
-                )
-                for i in range(len(decoder_dims) - 1)
-            }
-        )
+        self.decoder = nn.ModuleDict()
+        self.norm_layers = nn.ModuleDict()
+        
+        for i in range(len(decoder_dims) - 1):
+            self.decoder[f"dec_{i}"] = nn.Linear(
+                decoder_dims[i], decoder_dims[i + 1], bias=decoder_bias
+            )
+            if use_batch_norm:
+                self.norm_layers[f"norm_{i}"] = nn.BatchNorm1d(decoder_dims[i + 1])
+            elif use_layer_norm:
+                self.norm_layers[f"norm_{i}"] = nn.LayerNorm(decoder_dims[i + 1])
 
     def forward(self, z: torch.Tensor) -> torch.Tensor:
         """
@@ -261,6 +289,8 @@ class DecoderMLP(nn.Module):
         hid = z
         for i, (_, layer) in enumerate(self.decoder.items()):
             hid = self.dropout(layer(hid))
+            if f"norm_{i}" in self.norm_layers:
+                hid = self.norm_layers[f"norm_{i}"](hid)
             if (
                 i < len(self.decoder) - 1
                 and self.decoder_non_linear_activation is not None

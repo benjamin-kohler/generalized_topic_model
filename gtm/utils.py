@@ -3,7 +3,7 @@
 
 from sentence_transformers import SentenceTransformer
 from PIL import Image
-from sentence_transformers.models import CLIPModel
+from sentence_transformers.models import CLIPModel as sbCLIPModel
 from tqdm import tqdm
 import numpy as np
 import pandas as pd
@@ -17,7 +17,11 @@ import torch
 from torch.distributions.dirichlet import Dirichlet
 import gensim
 from gensim.corpora.dictionary import Dictionary
-from transformers import CLIPTokenizer
+from transformers import SiglipModel, AutoTokenizer, AutoModel
+from transformers import CLIPConfig, CLIPProcessor, CLIPModel
+# Load the processor and model
+
+
 
 def vect2gensim(vectorizer, dtmatrix):
     corpus_vect_gensim = gensim.matutils.Sparse2Corpus(dtmatrix, documents_columns=False)
@@ -187,7 +191,56 @@ def truncate_texts(texts, max_seq_length, model):
     
     return truncated_texts
 
+def auto_embeddings_from_list(texts, model_to_load, batch_size=None, max_seq_length=None, device="cpu"):
+    if texts.__class__ == pd.Series:
+        texts = texts.tolist()
+    if "siglip" in model_to_load:
+        load_fun = siglip_embeddings_from_list
+    elif "MM" in model_to_load:
+        load_fun = MM_embed_from_list
+    else:
+        load_fun = bert_embeddings_from_list
+    kwargs = create_kwargs(
+        texts,
+        model_to_load,
+        batch_size=batch_size,
+        max_seq_length=max_seq_length,
+        device=device,
+    )
+    return load_fun(**kwargs)
 
+
+def create_kwargs(
+    texts,
+    model_to_load,
+    batch_size=None,
+    max_seq_length=None,
+    device="cpu",
+):
+    if "siglip" in model_to_load:
+        kwargs = {
+            "texts": texts,
+            "siglip_model_to_load": model_to_load,
+            "device": device,
+        }
+    elif "MM" in model_to_load:
+        kwargs = {
+            "texts": texts,
+            "mm_model_to_load": model_to_load,
+            "batch_size": batch_size,
+            "device": device,
+        }
+    else:
+        kwargs = {
+            "texts": texts,
+            "sbert_model_to_load": model_to_load,
+            "batch_size": batch_size,
+            "max_seq_length": max_seq_length,
+            "device": device,
+        }
+
+    return kwargs
+    
 
 def bert_embeddings_from_list(
     texts, sbert_model_to_load, batch_size, max_seq_length, device="cpu"
@@ -195,8 +248,18 @@ def bert_embeddings_from_list(
     """
     Creates SBERT Embeddings from a list
     """
-    if "clip" in sbert_model_to_load:
-        model = SentenceTransformer(modules=[CustomCLIPModel(sbert_model_to_load)], device=device)
+    if "clip" in sbert_model_to_load.lower():
+        if "longclip" in sbert_model_to_load.lower():
+            config = CLIPConfig.from_pretrained(sbert_model_to_load)
+            config.text_config.max_position_embeddings = 248
+            custom_clip = CustomCLIPModel(sbert_model_to_load)
+            clip_model = CLIPModel.from_pretrained(sbert_model_to_load, config=config)
+            clip_processor = CLIPProcessor.from_pretrained(sbert_model_to_load, padding="max_length", max_length=248)
+            custom_clip.model = clip_model
+            custom_clip.processor = clip_processor
+            model = SentenceTransformer(modules=[custom_clip], device=device)
+        else:
+            model = SentenceTransformer(modules=[CustomCLIPModel(sbert_model_to_load)], device=device)
     else:
         model = SentenceTransformer(sbert_model_to_load, device=device)
     
@@ -206,6 +269,49 @@ def bert_embeddings_from_list(
 
     return np.array(model.encode(texts, show_progress_bar=True, batch_size=batch_size))
 
+
+def siglip_embeddings_from_list(
+    texts, siglip_model_to_load, max_seq_length, device="cpu"
+):
+    """
+    Creates Siglip Embeddings from a list
+    """
+
+    model = SiglipModel.from_pretrained(siglip_model_to_load)
+    model.to(device)
+    tokenizer = AutoTokenizer.from_pretrained("google/siglip-base-patch16-224")
+    if max_seq_length is not None:
+        model.max_seq_length = max_seq_length
+    model.eval()
+
+
+    inputs = tokenizer(texts, return_tensors="pt", padding="max_length", truncation=True).to(device)
+
+    with torch.no_grad():
+        outputs = model.get_text_features(**inputs)
+    return outputs.cpu().numpy()
+
+
+def MM_embed_from_list(
+    texts, mm_model_to_load, batch_size, device="cpu",is_text=True):
+    model = AutoModel.from_pretrained(mm_model_to_load, trust_remote_code=True)
+    model.to(device)
+
+    if is_text:
+        texts =[{'txt': text} for text in texts]
+    else:
+        texts = [{'image': text} for text in texts]
+
+    embeddings = []
+    for i in tqdm(range(0, len(texts), batch_size)):
+        batch = texts[i : i + batch_size]
+        print(batch)
+        embeddings_ = model.encode(batch, max_length=4096)['hidden_states']
+        embeddings.append(embeddings_)
+    return embeddings
+ 
+
+    
 
 def compute_mmd_loss(x, y, device, kernel = 'multiscale'):
     """Emprical maximum mean discrepancy. The lower the result
@@ -312,7 +418,7 @@ def topic_diversity(topic_words, topK=10):
 
 
 
-class CustomCLIPModel(CLIPModel):
+class CustomCLIPModel(sbCLIPModel):
     """The only difference to the default SentenceTransformer CLIPModel is that tokenization is done with truncation enabled."""
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)  

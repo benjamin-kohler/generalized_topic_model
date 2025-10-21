@@ -28,6 +28,8 @@ import torch.multiprocessing as mp
 from typing import Optional, List, Dict, Union
 from corpus import GTMCorpus
 from torch.serialization import add_safe_globals
+import copy
+import random
 
 class GTM:
     """
@@ -68,7 +70,11 @@ class GTM:
         print_every_n_batches: int = 10000,
         print_topics: bool = True,
         print_content_covariates: bool = True,
+        print_docs: bool = False,
+        print_visualisation_sample: bool = False,
         log_every_n_epochs: int = 10000,
+        use_layer_norm: bool = False,
+        use_batch_norm: bool = False,
         patience: int = 1,
         delta: float = 0.0,
         w_prior: Union[int, None] = 1,
@@ -109,7 +115,11 @@ class GTM:
             print_every_n_batches: number of batches between each print.
             print_topics: whether to print the top words per topic at each print.
             print_content_covariates: whether to print the top words associated to each content covariate at each print.
+            print_docs: whether to print the top documents associated to each topic at each print.
+            print_visualisation_sample: print tsne visualisation of 10% of the corpus after every 5 epochs.
             log_every_n_epochs: number of epochs between each checkpoint.
+            use_layer_norm: whether to use layer normalization in the encoder and decoder.
+            use_batch_norm: whether to use batch normalization in the encoder and decoder.
             patience: number of epochs to wait before stopping the training if the validation or training loss does not improve.
             delta: threshold to stop the training if the validation or training loss does not improve.
             w_prior: parameter to control the tightness of the encoder output with the document-topic prior. If set to None, w_prior is chosen automatically.
@@ -165,7 +175,11 @@ class GTM:
             self.print_every_n_batches = print_every_n_batches
             self.print_topics = print_topics
             self.print_content_covariates = print_content_covariates
+            self.print_docs = print_docs
+            self.print_visualisation_sample = print_visualisation_sample
             self.log_every_n_epochs = log_every_n_epochs
+            self.use_layer_norm = use_layer_norm
+            self.use_batch_norm = use_batch_norm
             self.patience = patience
             self.delta = delta
             self.w_prior = w_prior
@@ -182,6 +196,11 @@ class GTM:
                 np.random.seed(seed)
 
             self.set_device(device)
+
+            if self.print_visualisation_sample:
+                self.visualisation_dataset = copy.deepcopy(train_data)
+                self.visualisation_dataset.remove_documents(random.sample(train_data.df.index.tolist(),k=int(train_data.df.index.max()//1.1)))
+                self.visualisation_dataset.adjust_covariates_to_train_dim(train_dataset=train_data)
 
             bow_size = train_data.M_bow.shape[1]
             self.bow_size = bow_size
@@ -228,6 +247,9 @@ class GTM:
                 decoder_non_linear_activation=decoder_non_linear_activation,
                 decoder_bias=decoder_bias,
                 dropout=dropout,
+                use_layer_norm=use_layer_norm,
+                use_batch_norm=use_batch_norm,
+                
             ).to(self.device)
 
             if doc_topic_prior == "dirichlet":
@@ -399,6 +421,7 @@ class GTM:
             if (epoch + 1) % self.log_every_n_epochs == 0:
                 save_name = f'{self.ckpt_folder}/GTM_K{self.n_topics}_{self.doc_topic_prior}_{self.predictor_type}_{time.strftime("%Y-%m-%d-%H-%M", time.localtime())}_{self.epochs+1}.ckpt'
                 self.save_model(save_name)
+
 
             # Stopping rule for the optimization routine
             if test_data is not None:
@@ -574,7 +597,7 @@ class GTM:
                 print(
                     f"\nEpoch {(self.epochs+1):>3d}\tMean Training Loss:{sum(epochloss_lst)/len(epochloss_lst):<.7f}\n"
                 )
-
+        
             if self.print_topics:
                 print(
                     "\n".join(
@@ -585,6 +608,20 @@ class GTM:
                     )
                 )
                 print("\n")
+                # print(
+                #     "\n".join(
+                #         [
+                #             "{}: {}".format(k, str(v))
+                #             for k, v in self.get_topic_words(is_lift=True).items()
+                #         ]
+                #     )
+                # )
+                # print("\n")
+                
+            if self.print_docs:
+                print(
+                    self.get_top_docs(data_loader.dataset)
+                )
 
             if self.content_covariate_size != 0 and self.print_content_covariates:
                 print(
@@ -596,6 +633,12 @@ class GTM:
                     )
                 )
                 print("\n")
+
+                        
+            if (self.epochs + 1) % 5 == 0 and self.print_visualisation_sample==True:
+                print(self.visualize_docs(self.visualisation_dataset))
+                
+
 
         if self.update_prior is True and initialization is False and validation is False:
             all_topics = torch.cat(all_topics, dim=0).numpy()
@@ -741,7 +784,7 @@ class GTM:
 
         return final_predictions
 
-    def get_topic_words(self, l_content_covariates=[], topK=8):
+    def get_topic_words(self, l_content_covariates=[], topK=8, is_lift=False):
         """
         Get the top words per topic, potentially influenced by content covariates.
 
@@ -760,14 +803,23 @@ class GTM:
                 idxes[:, (self.n_topics + idx)] += 1
             word_dist = self.AutoEncoder.decode(idxes)
             word_dist = F.softmax(word_dist, dim=1)
-            _, indices = torch.topk(word_dist, topK, dim=1)
-            indices = indices.cpu().tolist()
+            if is_lift:
+                P_w_given_t = word_dist
+                corpus_word_counts = torch.sum(
+                    word_dist, dim=0
+                )
+                P_w = corpus_word_counts / corpus_word_counts.sum()  
+                lift = P_w_given_t / P_w.unsqueeze(0)
+                _, indices = torch.topk(lift, topK, dim=1)
+                indices = indices.cpu().tolist()
+            else:   
+                _, indices = torch.topk(word_dist, topK, dim=1)
+                indices = indices.cpu().tolist()
             for topic_id in range(self.n_topics):
                 topic_words["Topic_{}".format(topic_id)] = [
                     self.id2token[idx] for idx in indices[topic_id]
                 ]
-
-        return topic_words
+            return topic_words
 
     def get_covariate_words(self, topK=8):
         """
@@ -1299,6 +1351,10 @@ class GTM:
             if key not in ["AutoEncoder", "predictor", "optimizer"]:
                 setattr(self, key, value)
         self.set_device(None)
+        if ckpt.get("use_batch_norm", None) is None:
+            self.use_batch_norm = False
+        if ckpt.get("use_layer_norm", None) is None:
+            self.use_layer_norm = False
 
         if not hasattr(self, "AutoEncoder"):
             if self.encoder_include_prevalence_covariates:
@@ -1320,6 +1376,8 @@ class GTM:
                 decoder_non_linear_activation=self.decoder_non_linear_activation,
                 decoder_bias=self.decoder_bias,
                 dropout=self.dropout,
+                use_batch_norm=self.use_batch_norm,
+                use_layer_norm=self.use_layer_norm,
             ).to(self.device)
 
         self.AutoEncoder.load_state_dict(ckpt["AutoEncoder"])

@@ -35,6 +35,7 @@ class GTMOptimizer:
         predictor_non_linear_activation=["relu"],
         w_priors=[10],
         w_pred_losses=[1],
+        dropout=[0.2],
         gtm_model_args={
             "print_every_n_epochs": 1000000,
             "print_every_n_batches": 1000000,
@@ -82,6 +83,7 @@ class GTMOptimizer:
         self.predictor_non_linear_activation = predictor_non_linear_activation
         self.w_priors = w_priors
         self.w_pred_losses = w_pred_losses
+        self.dropout = dropout
         self.grid = None
         self.gtm_model_args = gtm_model_args
         self.topK = topK
@@ -135,7 +137,8 @@ class GTMOptimizer:
             predictor_hidden_layer,
             predictor_non_linear_activation,
             w_prior,  
-            w_pred_loss  
+            w_pred_loss,
+            dropout  
         ) in product(
             self.n_topics,
             self.doc_topic_priors,
@@ -149,8 +152,9 @@ class GTMOptimizer:
             self.decoder_biases,
             self.predictor_hidden_layers,
             self.predictor_non_linear_activation,
-            self.w_priors,  
-            self.w_pred_losses 
+            self.w_priors,
+            self.w_pred_losses,
+            self.dropout
         ):
             for _ in range(self.n_samples):
                 seed = _
@@ -168,9 +172,10 @@ class GTMOptimizer:
                     "predictor_hidden_layers": predictor_hidden_layer,
                     "predictor_non_linear_activation": predictor_non_linear_activation,
                     "w_prior": w_prior,  
-                    "w_pred_loss": w_pred_loss  
+                    "w_pred_loss": w_pred_loss,
+                    "dropout": dropout 
                 }
-
+                print(f"Training GTM with hyperparameters: {hyperparameters}")
                 gtm = GTM(
                     train_data=train_dataset,
                     test_data=test_dataset,
@@ -202,6 +207,8 @@ class GTMOptimizer:
                     "w_pred_loss":w_pred_loss,
                     "seed": seed,
                     "config_id": i,
+                    "dropout": dropout,
+                    "ckpt_folder": self.save_folder,
                 }
                 for metric in self.evaluation_metrics:
                     result[metric] = self.evaluate(gtm, metric)
@@ -232,7 +239,7 @@ class GTMOptimizer:
 
         if metric == "diversity":
             score = topic_diversity(topics, topK=self.topK)
-        elif metric == "c_nmpi": 
+        elif metric == "c_npmi": 
             cm = CoherenceModel(topics=topics, texts=self.texts, dictionary=self.dictionary, coherence='c_npmi')
             score = cm.get_coherence()
         elif metric == "c_v":
